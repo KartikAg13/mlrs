@@ -1,0 +1,16 @@
+[package]
+name = "mlrs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["KartikAg13"]
+repository = "https://github.com/KartikAg13/mlrs"
+description = "High-performance machine learning library in Rust"
+
+[dependencies]
+
+[dev-dependencies]
+
+# [[bench]]
+# name = "linear_regression"
+# harness = false
