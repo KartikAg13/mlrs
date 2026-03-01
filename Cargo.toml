@@ -13,12 +13,14 @@ categories = ["algorithms"]
 csv = "1.4.0"
 fastrand = "2.3.0"
 log = "0.4.29"
+memmap2 = "0.9.10"
 ndarray = "0.17.2"
 rayon = "1.11.0"
 thiserror = "2.0.18"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
+tempfile = "3.26.0"
 
 [[bench]]
 name = "assign_type_bench"

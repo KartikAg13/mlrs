@@ -8,4 +8,4 @@ High-performance machine learning library in Rust.
 
 ## License
 
-Dual-licensed under MIT OR Apache-2.0
+Licensed under Apache-2.0
