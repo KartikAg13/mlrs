@@ -1,62 +1,150 @@
-use csv::{Reader, ReaderBuilder};
-use log::error;
-use rayon;
-use std::{error::Error, fs::File};
+use csv::{Reader, ReaderBuilder, StringRecord};
+use std::collections::HashMap;
+use std::fs::File;
+use thiserror::Error;
 
-enum ColumnType {
-    Int(i32),
-    Float(f32),
-    String(String),
-    Boolean(bool),
+#[derive(Debug, Error)]
+pub enum DatasetError {
+    #[error("I/O error while reading file: {0}")]
+    IOReadError(#[from] std::io::Error),
+
+    #[error("Error parsing CSV: {0}")]
+    CSVParseError(#[from] csv::Error),
+
+    #[error("Dataset is empty")]
+    EmptyDatasetError,
+
+    #[error("Failed to assign column type in column {c} at index {i}")]
+    ColumnTypeAssignError { c: String, i: usize },
 }
 
-fn assign_type(filepath: String, delimiter: char, has_headers: bool) {
-    let csv_reader = load_csv(filepath, delimiter, has_headers);
-    // Check the first row of the dataset, if the value contains only numbers, assign Float or Boolean.
-    // Make 6 threads and make them randomly select a row and return the datatype acocrding to
-    // them. Then based on that we can assign the ColumnType.
-    // If the 1st row has string alphabets, then return String and there is no need to spawn threads. If the 1st row says,
-    // not string, then we need to assign either Int, Float or Boolean. (Maybe the column values
-    // are true or false in string). Now you know what to do. "yes" and "no" are common as well.
+#[derive(Debug, PartialEq)]
+pub enum ColumnTag {
+    Float,
+    String,
+    Boolean,
 }
 
-pub fn load_csv(
-    filepath: String,
-    delimiter: char,
-    has_headers: bool,
-) -> Result<Reader<File>, Box<dyn Error>> {
-    let file_reader: File = match File::open(&filepath) {
-        Ok(file) => file,
-        Err(err) => {
-            error!("Error opening at location: {}: {}", filepath, err);
-            return Err(Box::new(err));
-        }
-    };
-    let csv_reader = ReaderBuilder::new()
+fn load_csv(filepath: String, delimiter: char) -> Result<Reader<File>, DatasetError> {
+    Ok(ReaderBuilder::new()
         .delimiter(delimiter as u8)
-        .has_headers(has_headers)
-        .from_reader(file_reader);
-
-    Ok(csv_reader)
+        .from_path(&filepath)?)
 }
 
-pub fn label_encoder() -> Result<(), rayon::ThreadPoolBuildError> {
-    std::thread::scope(|scope| {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .spawn_handler(|thread| {
-                let mut builder = std::thread::Builder::new();
-                if let Some(name) = thread.name() {
-                    builder = builder.name(name.to_string());
-                }
-                if let Some(size) = thread.stack_size() {
-                    builder = builder.stack_size(size);
-                }
-                builder.spawn_scoped(scope, || thread.run())?;
-                Ok(())
-            })
-            .build()?;
-        pool.install(|| println!("Hello from kartik!"));
-        Ok(())
-    })
+fn infer_type(value: String) -> ColumnTag {
+    let v = value.trim().to_lowercase();
+    match v.as_str() {
+        "true" | "1" | "yes" => ColumnTag::Boolean,
+        "false" | "0" | "no" => ColumnTag::Boolean,
+        _ => match value.trim().parse::<f32>() {
+            Ok(_) => ColumnTag::Float,
+            Err(_) => ColumnTag::String,
+        },
+    }
+}
+
+pub fn assign_type(
+    filepath: String,
+    delimiter: Option<char>,
+) -> Result<HashMap<String, ColumnTag>, DatasetError> {
+    let deli: char = delimiter.unwrap_or(',');
+
+    let mut csv_reader: Reader<File> = load_csv(filepath.clone(), deli)?;
+
+    let headers: Vec<String> = csv_reader
+        .headers()?
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    const SAMPLE_SIZE: usize = 100;
+
+    let mut current_row: usize = 0;
+    let mut reservoir: Vec<Vec<String>> = Vec::with_capacity(SAMPLE_SIZE);
+    let mut string_record: StringRecord = StringRecord::new();
+    let mut map: HashMap<String, ColumnTag> = HashMap::new();
+
+    while csv_reader.read_record(&mut string_record)? {
+        if current_row < SAMPLE_SIZE {
+            reservoir.push(string_record.iter().map(|s| s.to_string()).collect());
+        } else {
+            let j = fastrand::usize(0..=current_row);
+            if j < SAMPLE_SIZE {
+                reservoir[j] = string_record.iter().map(|s| s.to_string()).collect();
+            }
+        }
+        current_row += 1;
+    }
+
+    if current_row == 0 {
+        return Err(DatasetError::EmptyDatasetError);
+    }
+
+    for row in &reservoir {
+        for (index, name) in headers.iter().enumerate() {
+            if map.get(name) == Some(&ColumnTag::String) {
+                continue;
+            }
+            let inferred_tag = infer_type(row[index].clone());
+            map.entry(name.clone())
+                .and_modify(|e| {
+                    if *e != inferred_tag {
+                        if *e == ColumnTag::Boolean && inferred_tag == ColumnTag::Float {
+                            *e = ColumnTag::Float;
+                        } else if *e == ColumnTag::Float && inferred_tag == ColumnTag::Boolean {
+                            *e = ColumnTag::Float;
+                        } else {
+                            *e = ColumnTag::String;
+                        }
+                    }
+                })
+                .or_insert_with(|| inferred_tag);
+        }
+    }
+    Ok(map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_assign_type_basic() {
+        let result = assign_type("tests/fixtures/sample.csv".to_string(), None);
+        assert!(result.is_ok());
+        let map = result.unwrap();
+        assert_eq!(map["id"], ColumnTag::Float);
+        assert_eq!(map["name"], ColumnTag::String);
+        assert_eq!(map["age"], ColumnTag::Float);
+        assert_eq!(map["salary"], ColumnTag::Float);
+        assert_eq!(map["active"], ColumnTag::Boolean);
+        assert_eq!(map["score"], ColumnTag::String);
+        assert_eq!(map["department"], ColumnTag::String);
+        assert_eq!(map["joined"], ColumnTag::String);
+        assert_eq!(map["rating"], ColumnTag::String);
+        assert_eq!(map["verified"], ColumnTag::String);
+        assert_eq!(map["code"], ColumnTag::String);
+        assert_eq!(map["region"], ColumnTag::String);
+        assert_eq!(map["level"], ColumnTag::Float);
+        assert_eq!(map["flag"], ColumnTag::String);
+        assert_eq!(map["count"], ColumnTag::String);
+        assert_eq!(map["value"], ColumnTag::String);
+        assert_eq!(map["status"], ColumnTag::String);
+        assert_eq!(map["tag"], ColumnTag::String);
+        assert_eq!(map["priority"], ColumnTag::String);
+        assert_eq!(map["notes"], ColumnTag::String);
+    }
+
+    #[test]
+    fn test_empty_csv_error() {
+        let result = assign_type("tests/fixtures/empty.csv".to_string(), Some(','));
+        assert!(matches!(result, Err(DatasetError::EmptyDatasetError)));
+    }
+
+    #[test]
+    fn test_inconsistent_row_length_error() {
+        let result = assign_type("tests/fixtures/inconsistent.csv".to_string(), None);
+        dbg!(&result);
+        assert!(matches!(result, Err(DatasetError::CSVParseError(..))));
+    }
 }
