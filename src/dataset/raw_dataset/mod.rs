@@ -1,207 +1,276 @@
-use csv::{Reader, ReaderBuilder, StringRecord};
-use rayon::prelude::*;
-use std::collections::HashMap;
-use std::fs::File;
-use thiserror::Error;
+use log::error;
+use polars::prelude::*;
 
-#[derive(Debug, Error)]
-pub enum DatasetError {
-    #[error("I/O error while reading file: {0}")]
-    IOReadError(#[from] std::io::Error),
-
-    #[error("Error parsing CSV: {0}")]
-    CSVParseError(#[from] csv::Error),
-
-    #[error("Dataset is empty")]
-    EmptyDatasetError,
-
-    #[error("Failed to assign column type in column {c} at index {i}")]
-    ColumnTypeAssignError { c: String, i: usize },
+pub struct CSVConfig {
+    filepath: String,
+    has_header: Option<bool>,
+    rechunk: Option<bool>,
+    low_memory: Option<bool>,
+    n_threads: Option<usize>,
+    chunk_size: Option<usize>,
 }
 
-#[derive(Debug, PartialEq)]
-pub enum ColumnTag {
-    Float,
-    String,
-    Boolean,
+impl CSVConfig {
+    pub fn new(filepath: impl Into<String>) -> Self {
+        Self {
+            filepath: filepath.into(),
+            has_header: Some(true),
+            rechunk: Some(false),
+            low_memory: Some(false),
+            n_threads: None,
+            chunk_size: Some(1 << 19),
+        }
+    }
+
+    pub fn with_has_header(mut self, has_header: bool) -> Self {
+        self.has_header = Some(has_header);
+        self
+    }
+
+    pub fn with_rechunk(mut self, rechunk: bool) -> Self {
+        self.rechunk = Some(rechunk);
+        self
+    }
+
+    pub fn with_low_memory(mut self, low_memory: bool) -> Self {
+        self.low_memory = Some(low_memory);
+        self
+    }
+
+    pub fn with_n_threads(mut self, n_threads: usize) -> Self {
+        self.n_threads = Some(n_threads);
+        self
+    }
+
+    pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.chunk_size = Some(chunk_size);
+        self
+    }
+
+    pub fn get_has_header(&self) -> bool {
+        self.has_header.unwrap()
+    }
+
+    pub fn get_rechunk(&self) -> bool {
+        self.rechunk.unwrap()
+    }
+
+    pub fn get_low_memory(&self) -> bool {
+        self.low_memory.unwrap()
+    }
+
+    pub fn get_n_threads(&self) -> Option<usize> {
+        self.n_threads
+    }
+
+    pub fn get_chunk_size(&self) -> usize {
+        self.chunk_size.unwrap()
+    }
 }
 
-fn load_csv(filepath: String, delimiter: char) -> Result<Reader<File>, DatasetError> {
-    Ok(ReaderBuilder::new()
-        .delimiter(delimiter as u8)
-        .from_path(&filepath)?)
+impl Default for CSVConfig {
+    fn default() -> Self {
+        Self::new("")
+    }
 }
 
-fn infer_type(value: String) -> ColumnTag {
-    let v = value.trim().to_lowercase();
-    match v.as_str() {
-        "true" | "1" | "yes" => ColumnTag::Boolean,
-        "false" | "0" | "no" => ColumnTag::Boolean,
-        _ => match value.trim().parse::<f32>() {
-            Ok(_) => ColumnTag::Float,
-            Err(_) => ColumnTag::String,
+pub enum CSVRead {
+    Filepath(String),
+    Config(CSVConfig),
+}
+
+impl From<String> for CSVRead {
+    fn from(value: String) -> Self {
+        CSVRead::Filepath(value)
+    }
+}
+
+impl From<&str> for CSVRead {
+    fn from(value: &str) -> Self {
+        CSVRead::Filepath(value.to_string())
+    }
+}
+
+impl From<CSVConfig> for CSVRead {
+    fn from(value: CSVConfig) -> Self {
+        CSVRead::Config(value)
+    }
+}
+
+pub fn load_csv(read: impl Into<CSVRead>) -> PolarsResult<DataFrame> {
+    let read = read.into();
+    let config = match read {
+        CSVRead::Filepath(path) => CSVConfig::new(path),
+        CSVRead::Config(cfg) => cfg,
+    };
+    load(config)
+}
+
+pub fn load(config: CSVConfig) -> PolarsResult<DataFrame> {
+    let dataframe = match CsvReadOptions::default()
+        .with_has_header(config.get_has_header())
+        .with_rechunk(config.get_rechunk())
+        .with_low_memory(config.get_low_memory())
+        .with_n_threads(config.get_n_threads())
+        .with_chunk_size(config.get_chunk_size())
+        .try_into_reader_with_file_path(Some(config.filepath.clone().into()))
+    {
+        Ok(f) => match f.finish() {
+            Ok(f) => f,
+            Err(e) => {
+                error!("Error reading file at location {}: {}", config.filepath, e);
+                return Err(e);
+            }
         },
-    }
-}
-
-pub fn assign_type(
-    filepath: String,
-    delimiter: Option<char>,
-) -> Result<HashMap<String, ColumnTag>, DatasetError> {
-    let deli: char = delimiter.unwrap_or(',');
-
-    let mut csv_reader: Reader<File> = load_csv(filepath.clone(), deli)?;
-
-    let headers: Vec<String> = csv_reader
-        .headers()?
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-
-    const SAMPLE_SIZE: usize = 100;
-
-    let mut current_row: usize = 0;
-    let mut reservoir: Vec<Vec<String>> = Vec::with_capacity(SAMPLE_SIZE);
-    let mut string_record: StringRecord = StringRecord::new();
-    let mut map: HashMap<String, ColumnTag> = HashMap::new();
-
-    while csv_reader.read_record(&mut string_record)? {
-        if current_row < SAMPLE_SIZE {
-            reservoir.push(string_record.iter().map(|s| s.to_string()).collect());
-        } else {
-            let j = fastrand::usize(0..=current_row);
-            if j < SAMPLE_SIZE {
-                reservoir[j] = string_record.iter().map(|s| s.to_string()).collect();
-            }
+        Err(e) => {
+            error!("Error reading file at location {}: {}", config.filepath, e);
+            return Err(e);
         }
-        current_row += 1;
+    };
+
+    println!(
+        "Dataset has {} rows and {} columns",
+        dataframe.height(),
+        dataframe.width()
+    );
+    let schema = dataframe.schema();
+    for (name, datatype) in schema.iter() {
+        println!("Column: {}, Datatype: {:?}", name, datatype);
     }
 
-    if current_row == 0 {
-        return Err(DatasetError::EmptyDatasetError);
-    }
-
-    for row in &reservoir {
-        for (index, name) in headers.iter().enumerate() {
-            if map.get(name) == Some(&ColumnTag::String) {
-                continue;
-            }
-            let inferred_tag = infer_type(row[index].clone());
-            map.entry(name.clone())
-                .and_modify(|e| {
-                    if *e != inferred_tag {
-                        if *e == ColumnTag::Boolean && inferred_tag == ColumnTag::Float {
-                            *e = ColumnTag::Float;
-                        } else if *e == ColumnTag::Float && inferred_tag == ColumnTag::Boolean {
-                            *e = ColumnTag::Float;
-                        } else {
-                            *e = ColumnTag::String;
-                        }
-                    }
-                })
-                .or_insert_with(|| inferred_tag);
-        }
-    }
-    Ok(map)
-}
-
-pub fn assign_type_parallel(
-    filepath: String,
-    delimiter: Option<char>,
-) -> Result<HashMap<String, ColumnTag>, DatasetError> {
-    let deli: char = delimiter.unwrap_or(',');
-
-    let mut csv_reader: Reader<File> = load_csv(filepath.clone(), deli)?;
-
-    let headers: Vec<String> = csv_reader
-        .headers()?
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-
-    const SAMPLE_SIZE: usize = 100;
-
-    let mut current_row: usize = 0;
-    let mut reservoir: Vec<Vec<String>> = Vec::with_capacity(SAMPLE_SIZE);
-    let mut string_record: StringRecord = StringRecord::new();
-
-    while csv_reader.read_record(&mut string_record)? {
-        if current_row < SAMPLE_SIZE {
-            reservoir.push(string_record.iter().map(|s| s.to_string()).collect());
-        } else {
-            let j = fastrand::usize(0..=current_row);
-            if j < SAMPLE_SIZE {
-                reservoir[j] = string_record.iter().map(|s| s.to_string()).collect();
-            }
-        }
-        current_row += 1;
-    }
-
-    if current_row == 0 {
-        return Err(DatasetError::EmptyDatasetError);
-    }
-
-    let map: HashMap<String, ColumnTag> = headers
-        .par_iter()
-        .enumerate()
-        .map(|(index, name)| {
-            let tag = reservoir
-                .iter()
-                .fold(None::<ColumnTag>, |acc, row| {
-                    let inferred_tag = infer_type(row[index].clone());
-                    Some(match acc {
-                        None => inferred_tag,
-                        Some(e) => match (&e, &inferred_tag) {
-                            (ColumnTag::String, _) | (_, ColumnTag::String) => ColumnTag::String,
-                            (ColumnTag::Float, _) | (_, ColumnTag::Float) => ColumnTag::Float,
-                            _ => e,
-                        },
-                    })
-                })
-                .unwrap_or(ColumnTag::String);
-            (name.clone(), tag)
-        })
-        .collect();
-
-    Ok(map)
+    Ok(dataframe)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_assign_type_basic() {
-        let map = assign_type("tests/fixtures/sample.csv".to_string(), None).unwrap();
-        let map_parallel =
-            assign_type_parallel("tests/fixtures/sample.csv".to_string(), None).unwrap();
+    const SAMPLE: &str = "tests/fixtures/sample.csv";
+    const EMPTY: &str = "tests/fixtures/empty.csv";
+    const INCONSISTENT: &str = "tests/fixtures/inconsistent.csv";
 
-        assert_eq!(map, map_parallel);
+    #[test]
+    fn test_load_csv_filepath_string() {
+        assert!(load_csv(SAMPLE.to_string()).is_ok());
     }
 
     #[test]
-    fn test_empty_csv_error() {
-        let result = assign_type("tests/fixtures/empty.csv".to_string(), Some(','));
-        let result_parallel =
-            assign_type_parallel("tests/fixtures/empty.csv".to_string(), Some(','));
-
-        assert!(matches!(result, Err(DatasetError::EmptyDatasetError)));
-        assert!(matches!(
-            result_parallel,
-            Err(DatasetError::EmptyDatasetError)
-        ));
+    fn test_load_csv_filepath_str() {
+        assert!(load_csv(SAMPLE).is_ok());
     }
 
     #[test]
-    fn test_inconsistent_row_length_error() {
-        let result = assign_type("tests/fixtures/inconsistent.csv".to_string(), None);
-        let result_parallel =
-            assign_type_parallel("tests/fixtures/inconsistent.csv".to_string(), None);
+    fn test_load_csv_file_not_found() {
+        assert!(load_csv("tests/fixtures/nonexistent.csv").is_err());
+    }
 
-        assert!(matches!(result, Err(DatasetError::CSVParseError(..))));
-        assert!(matches!(
-            result_parallel,
-            Err(DatasetError::CSVParseError(..))
-        ));
+    #[test]
+    fn test_load_csv_empty_file() {
+        let result = load_csv(EMPTY);
+        match result {
+            Ok(df) => assert_eq!(df.height(), 0),
+            Err(_) => {}
+        }
+    }
+
+    #[test]
+    fn test_sample_csv_shape() {
+        let df = load_csv(SAMPLE).unwrap();
+        assert_eq!(df.width(), 20);
+        assert_eq!(df.height(), 1_000_000);
+    }
+
+    #[test]
+    fn test_with_header_true() {
+        let df = load_csv(SAMPLE).unwrap();
+        assert!(df.column("id").is_ok());
+        assert!(df.column("name").is_ok());
+    }
+
+    #[test]
+    fn test_with_header_false() {
+        let df = load_csv(CSVConfig::new(SAMPLE).with_has_header(false)).unwrap();
+        assert!(df.column("column_1").is_ok());
+        assert!(df.column("id").is_err());
+    }
+
+    #[test]
+    fn test_config_defaults() {
+        let cfg = CSVConfig::new(SAMPLE);
+        assert_eq!(cfg.get_has_header(), true);
+        assert_eq!(cfg.get_rechunk(), false);
+        assert_eq!(cfg.get_low_memory(), false);
+        assert_eq!(cfg.get_n_threads(), None);
+        assert_eq!(cfg.get_chunk_size(), 1 << 19);
+    }
+
+    #[test]
+    fn test_config_builder_chain() {
+        let cfg = CSVConfig::new(SAMPLE)
+            .with_has_header(false)
+            .with_rechunk(true)
+            .with_low_memory(true)
+            .with_n_threads(4)
+            .with_chunk_size(1024);
+        assert_eq!(cfg.get_has_header(), false);
+        assert_eq!(cfg.get_rechunk(), true);
+        assert_eq!(cfg.get_low_memory(), true);
+        assert_eq!(cfg.get_n_threads(), Some(4));
+        assert_eq!(cfg.get_chunk_size(), 1024);
+    }
+
+    #[test]
+    fn test_load_with_config() {
+        let cfg = CSVConfig::new(SAMPLE)
+            .with_has_header(true)
+            .with_rechunk(true);
+        let result = load_csv(cfg);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_low_memory_mode() {
+        let cfg = CSVConfig::new(SAMPLE).with_low_memory(true);
+        let df = load_csv(cfg).unwrap();
+        assert_eq!(df.width(), 20);
+    }
+
+    #[test]
+    fn test_n_threads() {
+        let cfg = CSVConfig::new(SAMPLE).with_n_threads(2);
+        assert!(load_csv(cfg).is_ok());
+    }
+
+    #[test]
+    fn test_csvread_from_string() {
+        let r: CSVRead = SAMPLE.to_string().into();
+        assert!(matches!(r, CSVRead::Filepath(_)));
+    }
+
+    #[test]
+    fn test_csvread_from_str() {
+        let r: CSVRead = SAMPLE.into();
+        assert!(matches!(r, CSVRead::Filepath(_)));
+    }
+
+    #[test]
+    fn test_csvread_from_config() {
+        let r: CSVRead = CSVConfig::new(SAMPLE).into();
+        assert!(matches!(r, CSVRead::Config(_)));
+    }
+
+    #[test]
+    fn test_inconsistent_csv() {
+        let result = load_csv(INCONSISTENT);
+        match result {
+            Ok(df) => assert!(df.height() > 0),
+            Err(_) => {}
+        }
+    }
+
+    #[test]
+    fn test_csv_config_default_filepath_is_empty() {
+        let cfg = CSVConfig::default();
+        assert_eq!(cfg.filepath, "");
     }
 }
