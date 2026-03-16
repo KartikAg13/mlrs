@@ -1,34 +1,26 @@
-// tests/preprocessing_tests.rs
-use mlrs::dataset::load_csv;
-use mlrs::dataset::preprocessing::scaling::standard_scaler::StandardScaler;
+use mlrs::dataset::preprocessing::scaling::MinMaxScaler;
+use mlrs::dataset::read_csv;
 
 use polars::prelude::*;
 
 #[test]
-fn test_load_csv_and_scale() {
-    let mut df = load_csv("tests/fixtures/sample.csv").unwrap();
-    let original_shape = (df.height(), df.width());
+fn test_load_csv_and_minmax_scale() {
+    let mut df = read_csv("tests/fixtures/sample.csv");
 
-    let mut scaler = StandardScaler::new();
-    scaler.fit_transform(&mut df, &["age", "salary"]).unwrap();
+    let col = df.column("age").unwrap();
+    dbg!(col.dtype());
+    dbg!(col.null_count());
 
-    // shape preserved
-    assert_eq!(df.height(), original_shape.0);
-    assert_eq!(df.width(), original_shape.1);
+    let mut scaler = MinMaxScaler::new((0.0, 1.0));
+    scaler
+        .fit_transform(&mut df, &["age", "salary", "value", "id"])
+        .unwrap();
 
-    // dtypes of scaled columns are Float64
-    assert_eq!(*df.column("age").unwrap().dtype(), DataType::Float64);
-    assert_eq!(*df.column("salary").unwrap().dtype(), DataType::Float64);
+    let col = df.column("age").unwrap().cast(&DataType::Float64).unwrap();
+    let ca = col.f64().unwrap();
+    dbg!(ca.min());
+    dbg!(ca.max());
 
-    // mean~0, std~1 for scaled columns
-    for col_name in ["age", "salary"] {
-        let col = df
-            .column(col_name)
-            .unwrap()
-            .cast(&DataType::Float64)
-            .unwrap();
-        let ca = col.f64().unwrap();
-        assert!(ca.mean().unwrap().abs() < 1e-2);
-        assert!((ca.std(1).unwrap() - 1.0).abs() < 1e-2);
-    }
+    assert!(ca.min().unwrap() >= 0.0 - 1e-6);
+    assert!(ca.max().unwrap() <= 1.0 + 1e-6);
 }

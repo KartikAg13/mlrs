@@ -101,7 +101,7 @@ impl From<CSVConfig> for CSVRead {
     }
 }
 
-pub fn load_csv(read: impl Into<CSVRead>) -> PolarsResult<DataFrame> {
+fn load_csv(read: impl Into<CSVRead>) -> PolarsResult<DataFrame> {
     let read = read.into();
     let config = match read {
         CSVRead::Filepath(path) => CSVConfig::new(path),
@@ -110,7 +110,11 @@ pub fn load_csv(read: impl Into<CSVRead>) -> PolarsResult<DataFrame> {
     load(config)
 }
 
-pub fn load(config: CSVConfig) -> PolarsResult<DataFrame> {
+pub fn read_csv(read: impl Into<CSVRead>) -> DataFrame {
+    load_csv(read).expect("Failed to load csv")
+}
+
+fn load(config: CSVConfig) -> PolarsResult<DataFrame> {
     let dataframe = match CsvReadOptions::default()
         .with_has_header(config.get_has_header())
         .with_rechunk(config.get_rechunk())

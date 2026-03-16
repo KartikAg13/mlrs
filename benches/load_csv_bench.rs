@@ -1,18 +1,18 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use mlrs::dataset::load_csv;
-use mlrs::dataset::preprocessing::scaling::standard_scaler::StandardScaler;
+use mlrs::dataset::preprocessing::scaling::standard::StandardScaler;
+use mlrs::dataset::read_csv;
 
 const SAMPLE_FILEPATH: &str = "tests/fixtures/sample.csv";
 
 fn bench_load_csv(c: &mut Criterion) {
     c.bench_function("bench_load_csv_1M", |b| {
-        b.iter(|| load_csv(SAMPLE_FILEPATH))
+        b.iter(|| read_csv(SAMPLE_FILEPATH))
     });
 }
 
 fn bench_standard_scaler(c: &mut Criterion) {
-    let df = load_csv(SAMPLE_FILEPATH).unwrap();
-    let columns = ["age", "salary"];
+    let df = read_csv(SAMPLE_FILEPATH);
+    let columns = ["age", "salary", "value", "id"];
 
     c.bench_function("standard_scaler_fit_transform_1M", |b| {
         b.iter(|| {
