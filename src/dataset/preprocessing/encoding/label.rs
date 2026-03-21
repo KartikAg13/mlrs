@@ -1,0 +1,170 @@
+use log::error;
+use polars::prelude::*;
+use std::{collections::HashMap, u32};
+
+use crate::dataset::preprocessing::encoding::{Encoder, EncoderError, EncodingStrategy};
+
+pub struct LabelConfig {
+    pub mapping: HashMap<String, HashMap<String, u32>>,
+}
+
+pub type LabelEncoder = Encoder<LabelConfig>;
+
+impl LabelEncoder {
+    pub fn new() -> Self {
+        Self {
+            fitted: false,
+            config: LabelConfig {
+                mapping: HashMap::new(),
+            },
+        }
+    }
+}
+
+impl EncodingStrategy for LabelConfig {
+    fn compute_encoding(&mut self, column: &Column) -> Result<(), EncoderError> {
+        let name = column.name().to_string();
+        let column_chuncked = match column.str() {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Unexpected error occured: {}", e);
+                return Err(EncoderError::InvalidColumnType(name));
+            }
+        };
+        let mut label_map: HashMap<String, u32> = HashMap::new();
+        let mut counter: u32 = 0;
+        for value in column_chuncked.into_iter().flatten() {
+            label_map.entry(value.to_string()).or_insert_with(|| {
+                let label = counter;
+                counter += 1;
+                label
+            });
+        }
+        self.mapping.insert(name, label_map);
+        Ok(())
+    }
+
+    fn apply_encoding(&self, dataframe: &mut DataFrame, name: &str) -> Result<(), EncoderError> {
+        let mapping = match self.mapping.get(name) {
+            Some(m) => m,
+            _ => {
+                let e = PolarsError::ColumnNotFound(name.to_string().into());
+                error!("Error searching column {} in dataframe: {}", name, e);
+                return Err(EncoderError::ColumnNotFound(e));
+            }
+        };
+        let index = match dataframe.get_column_index(name) {
+            Some(i) => i,
+            _ => {
+                let e = PolarsError::ColumnNotFound(name.to_string().into());
+                error!("Error searching column {} in dataframe: {}", name, e);
+                return Err(EncoderError::ColumnNotFound(e));
+            }
+        };
+        let column = dataframe.column(name)?;
+        let column_chuncked = match column.str() {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Unexpected error occured: {}", e);
+                return Err(EncoderError::InvalidColumnType(name.to_string()));
+            }
+        };
+        let encoded: UInt32Chunked = column_chuncked
+            .apply_nonnull_values_generic(DataType::UInt32, |val| {
+                *mapping.get(val).unwrap_or(&u32::MAX)
+            });
+        let series = encoded.into_series().with_name(name.into());
+        dataframe.replace_column(index, Column::from(series))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dataset::preprocessing::encoding::EncoderError;
+
+    fn make_df() -> DataFrame {
+        df![
+            "color"  => ["red", "blue", "red", "green"],
+            "size"   => ["S", "M", "L", "M"],
+            "weight" => [1.0_f64, 2.0, 3.0, 4.0]
+        ]
+        .unwrap()
+    }
+
+    #[test]
+    fn test_label_fit_basic() {
+        let df = make_df();
+        let mut encoder = LabelEncoder::new();
+        assert!(encoder.fit(&df, &["color", "size"]).is_ok());
+        assert!(encoder.fitted);
+        assert!(encoder.config.mapping.contains_key("color"));
+        assert!(encoder.config.mapping.contains_key("size"));
+    }
+
+    #[test]
+    fn test_label_fit_column_not_found() {
+        let df = make_df();
+        let mut encoder = LabelEncoder::new();
+        assert!(matches!(
+            encoder.fit(&df, &["nonexistent"]),
+            Err(EncoderError::ColumnNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn test_label_fit_non_string_column() {
+        let df = make_df();
+        let mut encoder = LabelEncoder::new();
+        assert!(matches!(
+            encoder.fit(&df, &["weight"]),
+            Err(EncoderError::InvalidColumnType(_))
+        ));
+    }
+
+    #[test]
+    fn test_label_transform_not_fitted() {
+        let mut df = make_df();
+        let encoder = LabelEncoder::new();
+        assert!(matches!(
+            encoder.transform(&mut df, &["color"]),
+            Err(EncoderError::NotFitted)
+        ));
+    }
+
+    #[test]
+    fn test_label_transform_correct_values() {
+        let mut df = make_df();
+        let mut encoder = LabelEncoder::new();
+        encoder.fit(&df, &["color"]).unwrap();
+        encoder.transform(&mut df, &["color"]).unwrap();
+
+        // dtype should now be UInt32
+        assert_eq!(*df.column("color").unwrap().dtype(), DataType::UInt32);
+
+        // same input value should map to same label
+        let col = df.column("color").unwrap().u32().unwrap();
+        assert_eq!(col.get(0), col.get(2)); // both "red"
+    }
+
+    #[test]
+    fn test_label_unfitted_columns_unchanged() {
+        let mut df = make_df();
+        let original = df.column("size").unwrap().clone();
+        let mut encoder = LabelEncoder::new();
+        encoder.fit(&df, &["color"]).unwrap();
+        encoder.transform(&mut df, &["color"]).unwrap();
+        assert_eq!(df.column("size").unwrap(), &original);
+    }
+
+    #[test]
+    fn test_label_fit_transform_end_to_end() {
+        let mut df = make_df();
+        let mut encoder = LabelEncoder::new();
+        assert!(encoder.fit_transform(&mut df, &["color", "size"]).is_ok());
+        assert!(encoder.fitted);
+        assert_eq!(*df.column("color").unwrap().dtype(), DataType::UInt32);
+        assert_eq!(*df.column("size").unwrap().dtype(), DataType::UInt32);
+    }
+}

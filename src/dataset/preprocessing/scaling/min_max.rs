@@ -7,6 +7,14 @@ pub struct MinMaxConfig {
     pub feature_range: (f64, f64),
 }
 
+impl Default for MinMaxConfig {
+    fn default() -> Self {
+        Self {
+            feature_range: (0.0, 1.0),
+        }
+    }
+}
+
 pub type MinMaxScaler = Scaler<MinMaxConfig>;
 
 impl MinMaxScaler {
