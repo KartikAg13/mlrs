@@ -1,26 +1,19 @@
 pub use label::LabelEncoder;
 pub use one_hot::OneHotEncoder;
 
-use log::error;
 use polars::prelude::*;
-use thiserror::Error;
 
 pub mod label;
 pub mod one_hot;
-
-#[derive(Debug, Error)]
-pub enum EncoderError {
-    #[error("Encoder not fitted yet")]
-    NotFitted,
-    #[error("Column not found: {0}")]
-    ColumnNotFound(#[from] PolarsError),
-    #[error("Column is not string type: {0}")]
-    InvalidColumnType(String),
-}
+use crate::dataset::preprocessing::PreprocessingError;
 
 pub trait EncodingStrategy {
-    fn compute_encoding(&mut self, column: &Column) -> Result<(), EncoderError>;
-    fn apply_encoding(&self, dataframe: &mut DataFrame, name: &str) -> Result<(), EncoderError>;
+    fn compute_encoding(&mut self, column: &Column) -> Result<(), PreprocessingError>;
+    fn apply_encoding(
+        &self,
+        dataframe: &mut DataFrame,
+        name: &str,
+    ) -> Result<(), PreprocessingError>;
 }
 
 pub struct Encoder<T: EncodingStrategy> {
@@ -29,19 +22,33 @@ pub struct Encoder<T: EncodingStrategy> {
 }
 
 impl<T: EncodingStrategy> Encoder<T> {
-    pub fn fit(&mut self, dataframe: &DataFrame, columns: &[&str]) -> Result<(), EncoderError> {
+    pub fn fit(
+        &mut self,
+        dataframe: &DataFrame,
+        columns: &[&str],
+    ) -> Result<(), PreprocessingError> {
         for &name in columns {
             let column = match dataframe.column(name) {
                 Ok(c) => c.clone(),
-                Err(e) => {
-                    error!("Error searching column {} in dataframe: {}", name, e);
-                    return Err(EncoderError::ColumnNotFound(e));
+                Err(_) => {
+                    let error = PreprocessingError::ColumnNotFound(name.to_string());
+                    error.print_error();
+                    return Err(error);
                 }
             };
             if !matches!(column.dtype(), DataType::String) {
-                return Err(EncoderError::InvalidColumnType(name.to_string()));
+                let error = PreprocessingError::InvalidColumnType(
+                    name.to_string(),
+                    "String".to_string(),
+                    column.dtype().to_string(),
+                );
+                error.print_error();
+                return Err(error);
             }
-            self.config.compute_encoding(&column)?;
+            self.config.compute_encoding(&column).map_err(|error| {
+                error.print_error();
+                return error;
+            })?;
         }
         self.fitted = true;
         Ok(())
@@ -51,12 +58,19 @@ impl<T: EncodingStrategy> Encoder<T> {
         &self,
         dataframe: &mut DataFrame,
         columns: &[&str],
-    ) -> Result<(), EncoderError> {
+    ) -> Result<(), PreprocessingError> {
         if !self.fitted {
-            return Err(EncoderError::NotFitted);
+            let error = PreprocessingError::NotFitted;
+            error.print_error();
+            return Err(error);
         }
         for &name in columns {
-            self.config.apply_encoding(dataframe, name)?;
+            self.config
+                .apply_encoding(dataframe, name)
+                .map_err(|error| {
+                    error.print_error();
+                    return error;
+                })?;
         }
         Ok(())
     }
@@ -65,7 +79,7 @@ impl<T: EncodingStrategy> Encoder<T> {
         &mut self,
         dataframe: &mut DataFrame,
         columns: &[&str],
-    ) -> Result<(), EncoderError> {
+    ) -> Result<(), PreprocessingError> {
         self.fit(dataframe, columns)?;
         self.transform(dataframe, columns)
     }

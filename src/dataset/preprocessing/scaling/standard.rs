@@ -1,7 +1,10 @@
 use polars::prelude::*;
 use std::collections::HashMap;
 
-use crate::dataset::preprocessing::scaling::{Scaler, Scaling};
+use crate::dataset::preprocessing::{
+    PreprocessingError,
+    scaling::{Scaler, Scaling},
+};
 
 pub struct StandardConfig;
 
@@ -19,8 +22,18 @@ impl StandardScaler {
 
 impl Scaling for StandardConfig {
     fn compute_stats(&self, column: Column) -> (f64, f64) {
-        let mean = column.f64().unwrap().mean().unwrap_or(0.0);
-        let std = column.f64().unwrap().std(1).unwrap_or(1.0);
+        let column_chunked = match column.f64() {
+            Ok(c) => c,
+            Err(_) => {
+                PreprocessingError::print_warning(format!(
+                    "Column {} is not Float type. Skipped scaling!",
+                    column.name()
+                ));
+                return (0.0, 0.0);
+            }
+        };
+        let mean = column_chunked.mean().unwrap_or(0.0);
+        let std = column_chunked.std(1).unwrap_or(1.0);
         (mean, std)
     }
 
@@ -32,7 +45,7 @@ impl Scaling for StandardConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataset::preprocessing::scaling::ScalerError;
+    use crate::dataset::preprocessing::scaling::PreprocessingError;
 
     fn make_df() -> DataFrame {
         df![
@@ -60,7 +73,7 @@ mod tests {
         let df = make_df();
         let mut scaler = StandardScaler::new();
         let result = scaler.fit(&df, &["nonexistent"]);
-        assert!(matches!(result, Err(ScalerError::ColumnNotFound(_))));
+        assert!(matches!(result, Err(PreprocessingError::ColumnNotFound(_))));
     }
 
     #[test]
@@ -68,7 +81,10 @@ mod tests {
         let df = make_df();
         let mut scaler = StandardScaler::new();
         let result = scaler.fit(&df, &["name"]);
-        assert!(matches!(result, Err(ScalerError::InvalidColumnType(_))));
+        assert!(matches!(
+            result,
+            Err(PreprocessingError::InvalidColumnType(_, _, _))
+        ));
     }
 
     #[test]
@@ -77,7 +93,7 @@ mod tests {
         let scaler = StandardScaler::new();
         assert!(matches!(
             scaler.transform(&mut df),
-            Err(ScalerError::NotFitted)
+            Err(PreprocessingError::NotFitted)
         ));
     }
 

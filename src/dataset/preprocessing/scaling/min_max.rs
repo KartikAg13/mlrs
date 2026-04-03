@@ -1,7 +1,10 @@
 use polars::prelude::*;
 use std::collections::HashMap;
 
-use crate::dataset::preprocessing::scaling::{Scaler, Scaling};
+use crate::dataset::preprocessing::{
+    PreprocessingError,
+    scaling::{Scaler, Scaling},
+};
 
 pub struct MinMaxConfig {
     pub feature_range: (f64, f64),
@@ -29,12 +32,35 @@ impl MinMaxScaler {
 
 impl Scaling for MinMaxConfig {
     fn compute_stats(&self, column: Column) -> (f64, f64) {
-        let min = column.f64().unwrap().min().unwrap_or(0.0);
-        let max = column.f64().unwrap().max().unwrap_or(1.0);
+        let column_chunked = match column.f64() {
+            Ok(c) => c,
+            Err(_) => {
+                PreprocessingError::print_warning(format!(
+                    "Column {} is not Float type. Skipped scaling!",
+                    column.name()
+                ));
+                return (0.0, 0.0);
+            }
+        };
+        let min = column_chunked.min().unwrap_or(0.0);
+        let max = column_chunked.max().unwrap_or(1.0);
+
+        if (max - min).abs() < f64::EPSILON {
+            PreprocessingError::print_warning(format!(
+                "Column {} has min == max ({}). Column will be scaled to 0.0",
+                column.name(),
+                min
+            ));
+        }
+
         (min, max)
     }
 
     fn scale_value(&self, column: Column, stats: (f64, f64)) -> Column {
+        if (stats.1 - stats.0).abs() < f64::EPSILON {
+            return column * 0.0;
+        }
+
         (column - stats.0) / (stats.1 - stats.0) * (self.feature_range.1 - self.feature_range.0)
             + self.feature_range.0
     }
@@ -43,7 +69,7 @@ impl Scaling for MinMaxConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataset::preprocessing::scaling::ScalerError;
+    use crate::dataset::preprocessing::scaling::PreprocessingError;
 
     fn make_df() -> DataFrame {
         df![
@@ -72,7 +98,7 @@ mod tests {
         let mut scaler = MinMaxScaler::new((0.0, 1.0));
         assert!(matches!(
             scaler.fit(&df, &["nonexistent"]),
-            Err(ScalerError::ColumnNotFound(_))
+            Err(PreprocessingError::ColumnNotFound(_))
         ));
     }
 
@@ -82,7 +108,7 @@ mod tests {
         let mut scaler = MinMaxScaler::new((0.0, 1.0));
         assert!(matches!(
             scaler.fit(&df, &["name"]),
-            Err(ScalerError::InvalidColumnType(_))
+            Err(PreprocessingError::InvalidColumnType(_, _, _))
         ));
     }
 
@@ -92,7 +118,7 @@ mod tests {
         let scaler = MinMaxScaler::new((0.0, 1.0));
         assert!(matches!(
             scaler.transform(&mut df),
-            Err(ScalerError::NotFitted)
+            Err(PreprocessingError::NotFitted)
         ));
     }
 

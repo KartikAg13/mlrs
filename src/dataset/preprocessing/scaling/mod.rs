@@ -1,26 +1,13 @@
 pub use min_max::MinMaxScaler;
 pub use standard::StandardScaler;
 
-use log::error;
 use polars::prelude::*;
 use rayon::prelude::*;
 use std::{collections::HashMap, sync::Mutex};
-use thiserror::Error;
 
 pub mod min_max;
 pub mod standard;
-
-#[derive(Debug, Error)]
-pub enum ScalerError {
-    #[error("Scaler not fitted yet")]
-    NotFitted,
-    #[error("Column not found: {0}")]
-    ColumnNotFound(#[from] PolarsError),
-    #[error("Column is not numeric: {0}")]
-    InvalidColumnType(String),
-    #[error("Invalid feature range: min must be less than max")]
-    InvalidFeatureRange,
-}
+use crate::dataset::preprocessing::PreprocessingError;
 
 pub trait Scaling: Sync {
     fn compute_stats(&self, column: Column) -> (f64, f64);
@@ -34,15 +21,20 @@ pub struct Scaler<T: Scaling> {
 }
 
 impl<T: Scaling + Sync> Scaler<T> {
-    pub fn fit(&mut self, dataframe: &DataFrame, columns: &[&str]) -> Result<(), ScalerError> {
+    pub fn fit(
+        &mut self,
+        dataframe: &DataFrame,
+        columns: &[&str],
+    ) -> Result<(), PreprocessingError> {
         let stats: Mutex<HashMap<String, (f64, f64)>> = Mutex::new(HashMap::new());
 
         match columns.par_iter().try_for_each(|&name| {
             let column = match dataframe.column(name) {
                 Ok(c) => c,
-                Err(e) => {
-                    error!("Error searching column {} in dataframe: {}", name, e);
-                    return Err(ScalerError::ColumnNotFound(e));
+                Err(_) => {
+                    let error = PreprocessingError::ColumnNotFound(name.to_string());
+                    error.print_error();
+                    return Err(error);
                 }
             };
             if !matches!(
@@ -54,12 +46,13 @@ impl<T: Scaling + Sync> Scaler<T> {
                     | DataType::Int16
                     | DataType::UInt32
             ) {
-                error!(
-                    "Error converting column {} from {} to Float64",
-                    name,
-                    column.dtype()
+                let error = PreprocessingError::InvalidColumnType(
+                    name.to_string(),
+                    "Float / Int".to_string(),
+                    column.dtype().to_string(),
                 );
-                return Err(ScalerError::InvalidColumnType(name.to_string()));
+                error.print_error();
+                return Err(error);
             }
             let column_f64 = column.cast(&DataType::Float64).unwrap();
             let (a, b) = self.config.compute_stats(column_f64);
@@ -71,25 +64,26 @@ impl<T: Scaling + Sync> Scaler<T> {
                 self.fitted = true;
                 return Ok(());
             }
-            Err(e) => {
-                error!("Unexpected error occured: {}", e);
-                return Err(e);
+            Err(error) => {
+                error.print_error();
+                return Err(error);
             }
         };
     }
 
-    pub fn transform(&self, dataframe: &mut DataFrame) -> Result<(), ScalerError> {
+    pub fn transform(&self, dataframe: &mut DataFrame) -> Result<(), PreprocessingError> {
         if !self.fitted {
-            error!("Dataframe has not been fitted yet");
-            return Err(ScalerError::NotFitted);
+            let error = PreprocessingError::NotFitted;
+            error.print_error();
+            return Err(error);
         }
         for (name, &(a, b)) in &self.stats {
             let index = match dataframe.get_column_index(name.as_str()) {
                 Some(i) => i,
                 _ => {
-                    let e = PolarsError::ColumnNotFound(name.clone().into());
-                    error!("Error searching column {} in dataframe: {}", name, e);
-                    return Err(ScalerError::ColumnNotFound(e));
+                    let error = PreprocessingError::ColumnNotFound(name.to_string());
+                    error.print_error();
+                    return Err(error);
                 }
             };
             let column = match dataframe
@@ -98,17 +92,23 @@ impl<T: Scaling + Sync> Scaler<T> {
                 .cast(&DataType::Float64)
             {
                 Ok(c) => c,
-                Err(e) => {
-                    error!("Error converting column {} to Float64: {}", name, e);
-                    return Err(ScalerError::InvalidColumnType(name.to_string()));
+                Err(_) => {
+                    let error = PreprocessingError::InvalidColumnType(
+                        name.to_string(),
+                        "Float / Int".to_string(),
+                        dataframe.column(name)?.dtype().to_string(),
+                    );
+                    error.print_error();
+                    return Err(error);
                 }
             };
             let scaled_column = self.config.scale_value(column, (a, b));
             match dataframe.replace_column(index, scaled_column) {
                 Ok(_) => continue,
-                Err(e) => {
-                    error!("Unexpected error occured: {}", e);
-                    return Err(ScalerError::ColumnNotFound(e));
+                Err(_) => {
+                    let error = PreprocessingError::ColumnNotFound(name.to_string());
+                    error.print_error();
+                    return Err(error);
                 }
             }
         }
@@ -119,7 +119,7 @@ impl<T: Scaling + Sync> Scaler<T> {
         &mut self,
         dataframe: &mut DataFrame,
         columns: &[&str],
-    ) -> Result<(), ScalerError> {
+    ) -> Result<(), PreprocessingError> {
         self.fit(dataframe, columns)?;
         self.transform(dataframe)
     }

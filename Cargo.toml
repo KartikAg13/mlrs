@@ -10,16 +10,29 @@ keywords = ["machine-learning", "ml"]
 categories = ["algorithms"]
 
 [dependencies]
+colored = "3.1.1"
 log = "0.4.29"
 ndarray = "0.17.2"
 num_cpus = "1.17.0"
-polars = { version = "0.53.0", features = ["lazy", "ndarray"] }
+polars = { version = "0.53.0", features = ["dtype-categorical", "lazy", "ndarray"] }
 rayon = "1.11.0"
 thiserror = "2.0.18"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
 tempfile = "3.26.0"
+
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+codegen-units = 256
+
+[profile.test]
+opt-level = 0
+debug = true
+incremental = true
+codegen-units = 256
 
 [[bench]]
 name = "load_csv_bench"

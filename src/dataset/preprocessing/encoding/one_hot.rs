@@ -1,8 +1,7 @@
-use log::error;
 use polars::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use crate::dataset::preprocessing::encoding::{Encoder, EncoderError, EncodingStrategy};
+use crate::dataset::preprocessing::encoding::{Encoder, EncodingStrategy, PreprocessingError};
 
 pub struct OneHotConfig {
     pub categories: HashMap<String, Vec<String>>,
@@ -21,14 +20,25 @@ impl OneHotEncoder {
     }
 }
 
+impl Default for OneHotEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EncodingStrategy for OneHotConfig {
-    fn compute_encoding(&mut self, column: &Column) -> Result<(), EncoderError> {
+    fn compute_encoding(&mut self, column: &Column) -> Result<(), PreprocessingError> {
         let name = column.name().to_string();
         let column_chuncked = match column.str() {
             Ok(c) => c,
-            Err(e) => {
-                error!("Unexpected error occured: {}", e);
-                return Err(EncoderError::InvalidColumnType(name));
+            Err(_) => {
+                let error = PreprocessingError::InvalidColumnType(
+                    name,
+                    "String".to_string(),
+                    column.dtype().to_string(),
+                );
+                error.print_error();
+                return Err(error);
             }
         };
         let mut seen: HashSet<String> = HashSet::new();
@@ -43,36 +53,42 @@ impl EncodingStrategy for OneHotConfig {
         Ok(())
     }
 
-    fn apply_encoding(&self, dataframe: &mut DataFrame, name: &str) -> Result<(), EncoderError> {
+    fn apply_encoding(
+        &self,
+        dataframe: &mut DataFrame,
+        name: &str,
+    ) -> Result<(), PreprocessingError> {
         let cats = match self.categories.get(name) {
             Some(c) => c,
             _ => {
-                let e = PolarsError::ColumnNotFound(name.to_string().into());
-                error!("Error searching column {} in dataframe: {}", name, e);
-                return Err(EncoderError::ColumnNotFound(e));
+                let error = PreprocessingError::ColumnNotFound(name.to_string());
+                error.print_error();
+                return Err(error);
             }
         };
         let column = dataframe.column(name)?.clone();
         let column_chuncked = match column.str() {
             Ok(c) => c,
-            Err(e) => {
-                error!("Unexpected error occured: {}", e);
-                return Err(EncoderError::InvalidColumnType(name.to_string()));
+            Err(_) => {
+                let error = PreprocessingError::InvalidColumnType(
+                    name.to_string(),
+                    "String".to_string(),
+                    column.dtype().to_string(),
+                );
+                error.print_error();
+                return Err(error);
             }
         };
-        for cat in cats {
-            let new_column = format!("{}_{}", name, cat);
-            let binary: BooleanChunked = column_chuncked
-                .apply_nonnull_values_generic(DataType::Boolean, |value| value == cat.as_str());
-            let series = binary.into_series().with_name(new_column.as_str().into());
-            match dataframe.with_column(Column::from(series)) {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("Unexpected error occured: {}", e);
-                    return Err(e.into());
-                }
-            }
-        }
+        let new_columns: Vec<Column> = cats
+            .iter()
+            .map(|cat| {
+                let column_name = format!("{}_{}", name, cat);
+                let binary: BooleanChunked = column_chuncked
+                    .apply_nonnull_values_generic(DataType::Boolean, |value| value == cat.as_str());
+                Column::from(binary.into_series().with_name(column_name.as_str().into()))
+            })
+            .collect();
+        dataframe.hstack_mut(&new_columns)?;
         Ok(())
     }
 }
@@ -80,7 +96,7 @@ impl EncodingStrategy for OneHotConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataset::preprocessing::encoding::EncoderError;
+    use crate::dataset::preprocessing::encoding::PreprocessingError;
 
     fn make_df() -> DataFrame {
         df![
@@ -111,7 +127,7 @@ mod tests {
         let mut encoder = OneHotEncoder::new();
         assert!(matches!(
             encoder.fit(&df, &["nonexistent"]),
-            Err(EncoderError::ColumnNotFound(_))
+            Err(PreprocessingError::ColumnNotFound(_))
         ));
     }
 
@@ -121,7 +137,7 @@ mod tests {
         let mut encoder = OneHotEncoder::new();
         assert!(matches!(
             encoder.fit(&df, &["weight"]),
-            Err(EncoderError::InvalidColumnType(_))
+            Err(PreprocessingError::InvalidColumnType(_, _, _))
         ));
     }
 
@@ -131,7 +147,7 @@ mod tests {
         let encoder = OneHotEncoder::new();
         assert!(matches!(
             encoder.transform(&mut df, &["color"]),
-            Err(EncoderError::NotFitted)
+            Err(PreprocessingError::NotFitted)
         ));
     }
 
