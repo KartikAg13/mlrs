@@ -10,14 +10,16 @@ pub enum PreprocessingError {
     #[error("Column not fitted yet. Call .fit() or .fit_transform() before .transform()")]
     NotFitted,
 
-    #[error("Column {0} not found")]
+    #[error("Column '{0}' not found")]
     ColumnNotFound(String),
 
-    #[error("Column {0} is not the expected type. Expected datatype: {1}, Found datatype: {2}")]
+    #[error(
+        "Column '{0}' is not the expected type. Expected datatype: '{1}', Found datatype: '{2}'"
+    )]
     InvalidColumnType(String, String, String),
 
     #[error(
-        "Column {0} has unseen label '{1}'. Only labels found during .fit() or .fit_transform() are valid"
+        "Column '{0}' has unseen label '{1}'. Only labels found during .fit() or .fit_transform() are valid"
     )]
     UnseenLabel(String, String),
 

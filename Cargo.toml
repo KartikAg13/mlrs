@@ -14,12 +14,12 @@ colored = "3.1.1"
 log = "0.4.29"
 ndarray = "0.17.2"
 num_cpus = "1.17.0"
-polars = { version = "0.53.0", features = ["dtype-categorical", "lazy", "ndarray"] }
+polars = "0.53.0"
 rayon = "1.11.0"
 thiserror = "2.0.18"
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["html_reports"] }
+criterion = "0.8.2"
 tempfile = "3.26.0"
 
 [profile.dev]

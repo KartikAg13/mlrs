@@ -1798,7 +1798,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "indexmap",
  "itoa",
- "ndarray",
  "num-traits",
  "polars-arrow",
  "polars-buffer",
