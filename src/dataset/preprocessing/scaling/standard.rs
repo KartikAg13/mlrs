@@ -26,7 +26,7 @@ impl Scaling for StandardConfig {
             Ok(c) => c,
             Err(_) => {
                 PreprocessingError::print_warning(format!(
-                    "Column {} is not Float type. Skipped scaling!",
+                    "Column {} is not Float type.",
                     column.name()
                 ));
                 return (0.0, 0.0);
@@ -72,19 +72,28 @@ mod tests {
     fn test_fit_column_not_found() {
         let df = make_df();
         let mut scaler = StandardScaler::new();
+
         let result = scaler.fit(&df, &["nonexistent"]);
-        assert!(matches!(result, Err(PreprocessingError::ColumnNotFound(_))));
+        assert!(
+            result.is_ok(),
+            "fit should succeed with warning when column not found"
+        );
+        assert!(scaler.fitted);
+        assert!(!scaler.stats.contains_key("nonexistent"));
     }
 
     #[test]
     fn test_fit_non_numeric_column() {
         let df = make_df();
         let mut scaler = StandardScaler::new();
+
         let result = scaler.fit(&df, &["name"]);
-        assert!(matches!(
-            result,
-            Err(PreprocessingError::InvalidColumnType(_, _, _))
-        ));
+        assert!(
+            result.is_ok(),
+            "fit should succeed with warning for non-numeric column"
+        );
+        assert!(scaler.fitted);
+        assert!(scaler.stats.is_empty());
     }
 
     #[test]

@@ -12,7 +12,6 @@ const ONEHOT_COLS: [&str; 1] = ["home_ownership"];
 #[test]
 fn test_load_csv_and_minmax_scale() {
     let mut df = read_csv(FIXTURE);
-
     let mut scaler = MinMaxScaler::new((0.0, 1.0));
     scaler.fit_transform(&mut df, &NUMERIC_COLS).unwrap();
 
@@ -42,8 +41,28 @@ fn test_load_csv_and_minmax_scale() {
 fn test_minmax_column_not_found_warns_and_continues() {
     let mut df = read_csv(FIXTURE);
     let mut scaler = MinMaxScaler::new((0.0, 1.0));
+
     let result = scaler.fit_transform(&mut df, &["loan_amnt", "nonexistent"]);
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+
+    let col = df
+        .column("loan_amnt")
+        .unwrap()
+        .cast(&DataType::Float64)
+        .unwrap();
+    let ca = col.f64().unwrap();
+    assert!(ca.min().unwrap() >= -1e-6);
+    assert!(ca.max().unwrap() <= 1.0 + 1e-6);
+}
+
+#[test]
+fn test_minmax_wrong_type_warns_and_continues() {
+    let mut df = read_csv(FIXTURE);
+    let mut scaler = MinMaxScaler::new((0.0, 1.0));
+
+    let result = scaler.fit_transform(&mut df, &["loan_amnt", "grade"]);
+    assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+
     let col = df
         .column("loan_amnt")
         .unwrap()
@@ -57,7 +76,6 @@ fn test_minmax_column_not_found_warns_and_continues() {
 #[test]
 fn test_load_csv_and_standard_scale() {
     let mut df = read_csv(FIXTURE);
-
     let mut scaler = StandardScaler::new();
     scaler.fit_transform(&mut df, &NUMERIC_COLS).unwrap();
 
@@ -92,7 +110,11 @@ fn test_load_csv_and_label_encode() {
     let mut encoder = LabelEncoder::new();
     encoder.fit_transform(&mut df, &LABEL_COLS).unwrap();
 
-    assert_eq!(df.width(), original_width);
+    assert_eq!(
+        df.width(),
+        original_width,
+        "Label encoding must preserve width"
+    );
     for col_name in LABEL_COLS {
         assert_eq!(
             *df.column(col_name).unwrap().dtype(),
@@ -110,7 +132,6 @@ fn test_label_encode_consistent_mapping() {
     encoder.fit_transform(&mut df, &["grade"]).unwrap();
 
     let col = df.column("grade").unwrap().u32().unwrap();
-
     assert!(col.len() > 0);
 }
 
@@ -119,17 +140,31 @@ fn test_load_csv_and_onehot_encode() {
     let mut df = read_csv(FIXTURE);
     let original_width = df.width();
 
+    let categories: std::collections::HashSet<String> = df
+        .column("home_ownership")
+        .unwrap()
+        .str()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .map(|s| s.to_string())
+        .collect();
+
     let mut encoder = OneHotEncoder::new();
     encoder.fit_transform(&mut df, &ONEHOT_COLS).unwrap();
 
-    assert!(df.width() > original_width);
+    assert!(
+        df.width() > original_width,
+        "One-hot encoding must add columns"
+    );
 
-    for cat in ["RENT", "OWN", "MORTGAGE", "OTHER"] {
+    for cat in &categories {
         let col_name = format!("home_ownership_{}", cat);
         assert!(
             df.column(&col_name).is_ok(),
-            "Expected column {} not found",
-            col_name
+            "Expected column '{}' not found. Actual categories: {:?}",
+            col_name,
+            categories
         );
     }
 }

@@ -36,7 +36,7 @@ impl Scaling for MinMaxConfig {
             Ok(c) => c,
             Err(_) => {
                 PreprocessingError::print_warning(format!(
-                    "Column {} is not Float type. Skipped scaling!",
+                    "Column {} is not Float type.",
                     column.name()
                 ));
                 return (0.0, 0.0);
@@ -47,7 +47,7 @@ impl Scaling for MinMaxConfig {
 
         if (max - min).abs() < f64::EPSILON {
             PreprocessingError::print_warning(format!(
-                "Column {} has min == max ({}). Column will be scaled to 0.0",
+                "Column {} has min == max ({}). Column will be scaled to 0.0.",
                 column.name(),
                 min
             ));
@@ -96,20 +96,28 @@ mod tests {
     fn test_minmax_fit_column_not_found() {
         let df = make_df();
         let mut scaler = MinMaxScaler::new((0.0, 1.0));
-        assert!(matches!(
-            scaler.fit(&df, &["nonexistent"]),
-            Err(PreprocessingError::ColumnNotFound(_))
-        ));
+
+        let result = scaler.fit(&df, &["nonexistent"]);
+        assert!(
+            result.is_ok(),
+            "fit should succeed even if column is missing"
+        );
+        assert!(scaler.fitted);
+        assert!(!scaler.stats.contains_key("nonexistent"));
     }
 
     #[test]
     fn test_minmax_fit_non_numeric_column() {
         let df = make_df();
         let mut scaler = MinMaxScaler::new((0.0, 1.0));
-        assert!(matches!(
-            scaler.fit(&df, &["name"]),
-            Err(PreprocessingError::InvalidColumnType(_, _, _))
-        ));
+
+        let result = scaler.fit(&df, &["name"]);
+        assert!(
+            result.is_ok(),
+            "fit should succeed with warning for non-numeric column"
+        );
+        assert!(scaler.fitted);
+        assert!(scaler.stats.is_empty());
     }
 
     #[test]

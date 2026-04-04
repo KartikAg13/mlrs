@@ -28,13 +28,15 @@ impl<T: Scaling + Sync> Scaler<T> {
     ) -> Result<(), PreprocessingError> {
         let stats: Mutex<HashMap<String, (f64, f64)>> = Mutex::new(HashMap::new());
 
-        match columns.par_iter().try_for_each(|&name| {
+        columns.par_iter().for_each(|&name| {
             let column = match dataframe.column(name) {
                 Ok(c) => c,
                 Err(_) => {
-                    let error = PreprocessingError::ColumnNotFound(name.to_string());
-                    error.print_error();
-                    return Err(error);
+                    PreprocessingError::print_warning(format!(
+                        "Column '{0}' not found.",
+                        name
+                    ));
+                    return;
                 }
             };
             if !matches!(
@@ -46,29 +48,21 @@ impl<T: Scaling + Sync> Scaler<T> {
                     | DataType::Int16
                     | DataType::UInt32
             ) {
-                let error = PreprocessingError::InvalidColumnType(
-                    name.to_string(),
-                    "Float / Int".to_string(),
-                    column.dtype().to_string(),
-                );
-                error.print_error();
-                return Err(error);
+                PreprocessingError::print_warning(format!(
+                    "Column '{}' is not the expected type. Expected datatype: '{}', Found datatype: '{}'.",
+                    name,
+                    "Float / Int",
+                    column.dtype()
+                ));
+                return ;
             }
             let column_f64 = column.cast(&DataType::Float64).unwrap();
             let (a, b) = self.config.compute_stats(column_f64);
             stats.lock().unwrap().insert(name.to_string(), (a, b));
-            Ok(())
-        }) {
-            Ok(()) => {
-                self.stats = stats.into_inner().unwrap();
-                self.fitted = true;
-                return Ok(());
-            }
-            Err(error) => {
-                error.print_error();
-                return Err(error);
-            }
-        };
+        });
+        self.stats = stats.into_inner().unwrap();
+        self.fitted = true;
+        Ok(())
     }
 
     pub fn transform(&self, dataframe: &mut DataFrame) -> Result<(), PreprocessingError> {

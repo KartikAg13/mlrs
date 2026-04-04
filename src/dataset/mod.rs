@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use log::error;
 use polars::prelude::*;
 
 pub mod preprocessing;
@@ -12,6 +11,7 @@ pub struct CSVConfig {
     low_memory: Option<bool>,
     n_threads: Option<usize>,
     chunk_size: Option<usize>,
+    ignore_errors: Option<bool>,
 }
 
 impl CSVConfig {
@@ -23,6 +23,7 @@ impl CSVConfig {
             low_memory: Some(false),
             n_threads: None,
             chunk_size: Some(1 << 19),
+            ignore_errors: Some(false),
         }
     }
 
@@ -51,6 +52,11 @@ impl CSVConfig {
         self
     }
 
+    pub fn with_ignore_errors(mut self, ignore_errors: bool) -> Self {
+        self.ignore_errors = Some(ignore_errors);
+        self
+    }
+
     pub fn get_has_header(&self) -> bool {
         self.has_header.unwrap_or(true)
     }
@@ -69,6 +75,10 @@ impl CSVConfig {
 
     pub fn get_chunk_size(&self) -> usize {
         self.chunk_size.unwrap_or(1 << 19)
+    }
+
+    pub fn get_ignore_errors(&self) -> bool {
+        self.ignore_errors.unwrap_or(false)
     }
 }
 
@@ -115,34 +125,16 @@ pub fn read_csv(read: impl Into<CSVRead>) -> DataFrame {
 }
 
 fn load(config: CSVConfig) -> PolarsResult<DataFrame> {
-    let dataframe = match CsvReadOptions::default()
+    let dataframe = CsvReadOptions::default()
         .with_has_header(config.get_has_header())
         .with_rechunk(config.get_rechunk())
         .with_low_memory(config.get_low_memory())
         .with_n_threads(config.get_n_threads())
         .with_chunk_size(config.get_chunk_size())
-        .try_into_reader_with_file_path(Some(config.filepath.clone().into()))
-    {
-        Ok(f) => match f.finish() {
-            Ok(f) => f,
-            Err(e) => {
-                error!(
-                    "Error reading file at location {}: {}",
-                    config.filepath.display(),
-                    e
-                );
-                return Err(e);
-            }
-        },
-        Err(e) => {
-            error!(
-                "Error reading file at location {}: {}",
-                config.filepath.display(),
-                e
-            );
-            return Err(e);
-        }
-    };
+        .with_ignore_errors(config.get_ignore_errors())
+        .with_infer_schema_length(Some(0))
+        .try_into_reader_with_file_path(Some(config.filepath.clone().into()))?
+        .finish()?;
 
     // println!(
     //     "Dataset has {} rows and {} columns",
@@ -256,6 +248,12 @@ mod tests {
     #[test]
     fn test_n_threads() {
         let cfg = CSVConfig::new(SAMPLE).with_n_threads(2);
+        assert!(load_csv(cfg).is_ok());
+    }
+
+    #[test]
+    fn test_ignore_errors() {
+        let cfg = CSVConfig::new(INCONSISTENT).with_ignore_errors(true);
         assert!(load_csv(cfg).is_ok());
     }
 

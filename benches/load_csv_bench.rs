@@ -3,21 +3,24 @@ use mlrs::dataset::preprocessing::encoding::label::LabelEncoder;
 use mlrs::dataset::preprocessing::encoding::one_hot::OneHotEncoder;
 use mlrs::dataset::preprocessing::scaling::min_max::MinMaxScaler;
 use mlrs::dataset::preprocessing::scaling::standard::StandardScaler;
-use mlrs::dataset::read_csv;
+use mlrs::dataset::{CSVConfig, read_csv};
 
 const SAMPLE_FILEPATH: &str = "tests/fixtures/sample_1M.csv";
 const NUMERIC_COLS: [&str; 4] = ["loan_amnt", "funded_amnt", "installment", "annual_inc"];
 const LABEL_COLS: [&str; 3] = ["grade", "home_ownership", "verification_status"];
 const ONEHOT_COLS: [&str; 1] = ["home_ownership"];
 
+fn load_bench_df() -> polars::frame::DataFrame {
+    let cfg = CSVConfig::new(SAMPLE_FILEPATH).with_ignore_errors(true);
+    read_csv(cfg)
+}
+
 fn bench_load_csv(c: &mut Criterion) {
-    c.bench_function("bench_load_csv_1M", |b| {
-        b.iter(|| read_csv(SAMPLE_FILEPATH))
-    });
+    c.bench_function("bench_load_csv_1M", |b| b.iter(|| load_bench_df()));
 }
 
 fn bench_standard_scaler(c: &mut Criterion) {
-    let df = read_csv(SAMPLE_FILEPATH);
+    let df = load_bench_df();
     c.bench_function("standard_scaler_fit_transform_1M", |b| {
         b.iter(|| {
             let mut df_clone = df.clone();
@@ -28,7 +31,7 @@ fn bench_standard_scaler(c: &mut Criterion) {
 }
 
 fn bench_minmax_scaler(c: &mut Criterion) {
-    let df = read_csv(SAMPLE_FILEPATH);
+    let df = load_bench_df();
     c.bench_function("minmax_scaler_fit_transform_1M", |b| {
         b.iter(|| {
             let mut df_clone = df.clone();
@@ -39,7 +42,7 @@ fn bench_minmax_scaler(c: &mut Criterion) {
 }
 
 fn bench_label_encoder(c: &mut Criterion) {
-    let df = read_csv(SAMPLE_FILEPATH);
+    let df = load_bench_df();
     c.bench_function("label_encoder_fit_transform_1M", |b| {
         b.iter(|| {
             let mut df_clone = df.clone();
@@ -50,7 +53,7 @@ fn bench_label_encoder(c: &mut Criterion) {
 }
 
 fn bench_onehot_encoder(c: &mut Criterion) {
-    let df = read_csv(SAMPLE_FILEPATH);
+    let df = load_bench_df();
     c.bench_function("onehot_encoder_fit_transform_1M", |b| {
         b.iter(|| {
             let mut df_clone = df.clone();

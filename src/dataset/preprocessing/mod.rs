@@ -29,10 +29,15 @@ pub enum PreprocessingError {
 
 impl PreprocessingError {
     pub fn print_error(&self) {
-        eprintln!("{} {}", "ERROR: ".red().bold(), self.to_string().red());
+        eprintln!("{}{}", "ERROR: ".red().bold(), self.to_string().red());
     }
 
     pub fn print_warning(message: String) {
-        eprintln!("{} {}", "WARNING: ".yellow().bold(), message.yellow());
+        eprintln!(
+            "{}{}{}",
+            "WARNING: ".yellow().bold(),
+            message.yellow(),
+            " Skipping!".yellow()
+        );
     }
 }
