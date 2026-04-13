@@ -39,7 +39,7 @@ impl<T: Scaling + Sync> Scaler<T> {
                     return;
                 }
             };
-            if is_numeric(column.dtype()) {
+            if !is_numeric(column.dtype()) {
                 PreprocessingError::print_warning(format!(
                     "Column '{}' is not the expected type. Expected datatype: '{}', Found datatype: '{}'.",
                     name,
