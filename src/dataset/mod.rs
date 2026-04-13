@@ -132,19 +132,18 @@ fn load(config: CSVConfig) -> PolarsResult<DataFrame> {
         .with_n_threads(config.get_n_threads())
         .with_chunk_size(config.get_chunk_size())
         .with_ignore_errors(config.get_ignore_errors())
-        .with_infer_schema_length(Some(0))
         .try_into_reader_with_file_path(Some(config.filepath.clone().into()))?
         .finish()?;
 
-    // println!(
-    //     "Dataset has {} rows and {} columns",
-    //     dataframe.height(),
-    //     dataframe.width()
-    // );
-    // let schema = dataframe.schema();
-    // for (name, datatype) in schema.iter() {
-    //     println!("Column: {}, Datatype: {:?}", name, datatype);
-    // }
+    println!(
+        "Dataset has {} rows and {} columns",
+        dataframe.height(),
+        dataframe.width()
+    );
+    let schema = dataframe.schema();
+    for (name, datatype) in schema.iter() {
+        println!("Column: {}, Datatype: {:?}", name, datatype);
+    }
 
     Ok(dataframe)
 }

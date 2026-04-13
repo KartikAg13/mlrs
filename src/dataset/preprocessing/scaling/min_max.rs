@@ -36,7 +36,7 @@ impl Scaling for MinMaxConfig {
             Ok(c) => c,
             Err(_) => {
                 PreprocessingError::print_warning(format!(
-                    "Column {} is not Float type.",
+                    "Column '{}' is not Float type.",
                     column.name()
                 ));
                 return (0.0, 0.0);
@@ -47,7 +47,7 @@ impl Scaling for MinMaxConfig {
 
         if (max - min).abs() < f64::EPSILON {
             PreprocessingError::print_warning(format!(
-                "Column {} has min == max ({}). Column will be scaled to 0.0.",
+                "Column '{}' has min == max ({}). Column will be scaled to 0.0.",
                 column.name(),
                 min
             ));

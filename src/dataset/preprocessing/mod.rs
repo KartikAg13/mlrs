@@ -1,4 +1,5 @@
 pub mod encoding;
+pub mod handling;
 pub mod scaling;
 
 use colored::Colorize;
@@ -40,4 +41,20 @@ impl PreprocessingError {
             " Skipping!".yellow()
         );
     }
+}
+
+pub fn is_numeric(datatype: &DataType) -> bool {
+    matches!(
+        datatype,
+        DataType::Float32
+            | DataType::Float64
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Int16
+            | DataType::UInt32
+    )
+}
+
+pub fn is_categorical(datatype: &DataType) -> bool {
+    matches!(datatype, DataType::String)
 }

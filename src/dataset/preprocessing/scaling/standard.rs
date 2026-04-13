@@ -26,7 +26,7 @@ impl Scaling for StandardConfig {
             Ok(c) => c,
             Err(_) => {
                 PreprocessingError::print_warning(format!(
-                    "Column {} is not Float type.",
+                    "Column '{}' is not Float type.",
                     column.name()
                 ));
                 return (0.0, 0.0);

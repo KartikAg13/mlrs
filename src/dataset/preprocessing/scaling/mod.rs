@@ -7,7 +7,7 @@ use std::{collections::HashMap, sync::Mutex};
 
 pub mod min_max;
 pub mod standard;
-use crate::dataset::preprocessing::PreprocessingError;
+use crate::dataset::preprocessing::{PreprocessingError, is_numeric};
 
 pub trait Scaling: Sync {
     fn compute_stats(&self, column: Column) -> (f64, f64);
@@ -33,21 +33,13 @@ impl<T: Scaling + Sync> Scaler<T> {
                 Ok(c) => c,
                 Err(_) => {
                     PreprocessingError::print_warning(format!(
-                        "Column '{0}' not found.",
+                        "Column '{}' not found.",
                         name
                     ));
                     return;
                 }
             };
-            if !matches!(
-                column.dtype(),
-                DataType::Float32
-                    | DataType::Float64
-                    | DataType::Int32
-                    | DataType::Int64
-                    | DataType::Int16
-                    | DataType::UInt32
-            ) {
+            if is_numeric(column.dtype()) {
                 PreprocessingError::print_warning(format!(
                     "Column '{}' is not the expected type. Expected datatype: '{}', Found datatype: '{}'.",
                     name,
