@@ -15,4 +15,4 @@ Cargo.lock
 Thumbs.db
 EOF
 
-fixtures/
+**/sample_1M.csv
