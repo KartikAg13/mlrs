@@ -1,7 +1,7 @@
 use polars::prelude::*;
 use std::collections::HashMap;
 
-use crate::dataset::preprocessing::encoding::{Encoder, EncodingStrategy, PreprocessingError};
+use crate::dataset::preprocesser::encoder::{Encoder, EncodingStrategy, PreprocessingError};
 
 pub struct LabelConfig {
     pub mapping: HashMap<String, HashMap<String, u32>>,
@@ -101,7 +101,7 @@ impl EncodingStrategy for LabelConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataset::preprocessing::encoding::PreprocessingError;
+    use crate::dataset::preprocesser::encoder::PreprocessingError;
 
     fn make_df() -> DataFrame {
         df![

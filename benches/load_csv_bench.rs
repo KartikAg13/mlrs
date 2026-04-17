@@ -1,8 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use mlrs::dataset::preprocessing::encoding::label::LabelEncoder;
-use mlrs::dataset::preprocessing::encoding::one_hot::OneHotEncoder;
-use mlrs::dataset::preprocessing::scaling::min_max::MinMaxScaler;
-use mlrs::dataset::preprocessing::scaling::standard::StandardScaler;
+use mlrs::dataset::preprocesser::encoder::label::LabelEncoder;
+use mlrs::dataset::preprocesser::encoder::one_hot::OneHotEncoder;
+use mlrs::dataset::preprocesser::scaler::min_max::MinMaxScaler;
+use mlrs::dataset::preprocesser::scaler::standard::StandardScaler;
 use mlrs::dataset::{CSVConfig, read_csv};
 
 const SAMPLE_FILEPATH: &str = "tests/fixtures/sample_1M.csv";

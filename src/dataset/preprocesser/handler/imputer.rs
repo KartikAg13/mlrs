@@ -1,6 +1,6 @@
 use polars::prelude::*;
 
-use crate::dataset::preprocessing::PreprocessingError;
+use crate::dataset::preprocesser::PreprocessingError;
 
 #[derive(Debug, Clone)]
 pub enum Strategy {

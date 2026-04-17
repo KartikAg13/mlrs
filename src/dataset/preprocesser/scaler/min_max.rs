@@ -1,9 +1,9 @@
 use polars::prelude::*;
 use std::collections::HashMap;
 
-use crate::dataset::preprocessing::{
+use crate::dataset::preprocesser::{
     PreprocessingError,
-    scaling::{Scaler, Scaling},
+    scaler::{Scaler, Scaling},
 };
 
 pub struct MinMaxConfig {
@@ -69,7 +69,7 @@ impl Scaling for MinMaxConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataset::preprocessing::scaling::PreprocessingError;
+    use crate::dataset::preprocesser::scaler::PreprocessingError;
 
     fn make_df() -> DataFrame {
         df![

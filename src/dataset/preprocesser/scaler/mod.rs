@@ -7,7 +7,7 @@ use std::{collections::HashMap, sync::Mutex};
 
 pub mod min_max;
 pub mod standard;
-use crate::dataset::preprocessing::{PreprocessingError, is_numeric};
+use crate::dataset::preprocesser::{PreprocessingError, is_numeric};
 
 pub trait Scaling: Sync {
     fn compute_stats(&self, column: Column) -> (f64, f64);

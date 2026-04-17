@@ -1,6 +1,6 @@
-pub mod encoding;
-pub mod handling;
-pub mod scaling;
+pub mod encoder;
+pub mod handler;
+pub mod scaler;
 
 use colored::Colorize;
 use polars::prelude::*;

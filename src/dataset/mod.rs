@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use polars::prelude::*;
 
-pub mod preprocessing;
+pub mod preprocesser;
 
 pub struct CSVConfig {
     filepath: PathBuf,
@@ -132,7 +132,7 @@ fn load(config: CSVConfig) -> PolarsResult<DataFrame> {
         .with_n_threads(config.get_n_threads())
         .with_chunk_size(config.get_chunk_size())
         .with_ignore_errors(config.get_ignore_errors())
-        .try_into_reader_with_file_path(Some(config.filepath.clone().into()))?
+        .try_into_reader_with_file_path(Some(config.filepath.clone()))?
         .finish()?;
 
     println!(

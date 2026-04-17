@@ -5,7 +5,7 @@ use polars::prelude::*;
 
 pub mod label;
 pub mod one_hot;
-use crate::dataset::preprocessing::PreprocessingError;
+use crate::dataset::preprocesser::PreprocessingError;
 
 pub trait EncodingStrategy {
     fn compute_encoding(&mut self, column: &Column) -> Result<(), PreprocessingError>;
@@ -45,10 +45,13 @@ impl<T: EncodingStrategy> Encoder<T> {
                 error.print_error();
                 return Err(error);
             }
-            self.config.compute_encoding(&column).map_err(|error| {
-                error.print_error();
-                return error;
-            })?;
+            match self.config.compute_encoding(&column) {
+                Ok(_) => continue,
+                Err(error) => {
+                    error.print_error();
+                    return Err(error);
+                }
+            }
         }
         self.fitted = true;
         Ok(())
@@ -65,12 +68,13 @@ impl<T: EncodingStrategy> Encoder<T> {
             return Err(error);
         }
         for &name in columns {
-            self.config
-                .apply_encoding(dataframe, name)
-                .map_err(|error| {
+            match self.config.apply_encoding(dataframe, name) {
+                Ok(_) => continue,
+                Err(error) => {
                     error.print_error();
-                    return error;
-                })?;
+                    return Err(error);
+                }
+            }
         }
         Ok(())
     }

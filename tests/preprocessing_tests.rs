@@ -1,5 +1,5 @@
-use mlrs::dataset::preprocessing::encoding::{LabelEncoder, OneHotEncoder};
-use mlrs::dataset::preprocessing::scaling::{MinMaxScaler, StandardScaler};
+use mlrs::dataset::preprocesser::encoder::{LabelEncoder, OneHotEncoder};
+use mlrs::dataset::preprocesser::scaler::{MinMaxScaler, StandardScaler};
 use polars::prelude::*;
 
 fn make_test_dataframe() -> DataFrame {

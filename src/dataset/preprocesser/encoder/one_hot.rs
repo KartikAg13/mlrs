@@ -1,7 +1,7 @@
 use polars::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use crate::dataset::preprocessing::encoding::{Encoder, EncodingStrategy, PreprocessingError};
+use crate::dataset::preprocesser::encoder::{Encoder, EncodingStrategy, PreprocessingError};
 
 pub struct OneHotConfig {
     pub categories: HashMap<String, Vec<String>>,
@@ -96,7 +96,7 @@ impl EncodingStrategy for OneHotConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataset::preprocessing::encoding::PreprocessingError;
+    use crate::dataset::preprocesser::encoder::PreprocessingError;
 
     fn make_df() -> DataFrame {
         df![
