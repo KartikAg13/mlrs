@@ -1,3 +1,13 @@
+//! Feature scaling utilities for machine learning pipelines.
+//!
+//! This module provides two common scalers:
+//! - [`MinMaxScaler`] — scales features to a given range (default `[0, 1]`)
+//! - [`StandardScaler`] — standardizes features to zero mean and unit variance
+//!
+//! All scalers support parallel computation via Rayon and work directly on
+//! `polars::DataFrame`. They follow the familiar scikit-learn style API:
+//! `.fit()`, `.transform()`, and `.fit_transform()`.
+
 pub use min_max::MinMaxScaler;
 pub use standard::StandardScaler;
 
@@ -9,11 +19,17 @@ pub mod min_max;
 pub mod standard;
 use crate::dataset::preprocesser::{PreprocessingError, is_numeric};
 
+/// Common trait for all scaling strategies.
+///
+/// Implementors define how statistics are computed and how values are scaled.
 pub trait Scaling: Sync {
     fn compute_stats(&self, column: Column) -> (f64, f64);
     fn scale_value(&self, column: Column, stats: (f64, f64)) -> Column;
 }
 
+/// Generic scaler that holds fitted statistics for selected columns.
+///
+/// Use [`MinMaxScaler`] or [`StandardScaler`] for concrete implementations.
 pub struct Scaler<T: Scaling> {
     pub stats: HashMap<String, (f64, f64)>,
     pub fitted: bool,
@@ -21,6 +37,58 @@ pub struct Scaler<T: Scaling> {
 }
 
 impl<T: Scaling + Sync> Scaler<T> {
+    /// Fits the scaler on the specified columns using parallel computation.
+    ///
+    /// Only numeric columns are processed. Non-numeric columns and missing
+    /// columns emit a warning and are skipped.
+    ///
+    /// # Examples
+    ///
+    /// **Basic usage with MinMaxScaler:**
+    /// ```
+    /// use mlrs::dataset::preprocesser::scaler::min_max::MinMaxScaler;
+    /// use polars::prelude::*;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut df = df![
+    ///     "age" => [25, 30, 35, 40],
+    ///     "income" => [50000, 60000, 70000, 80000]
+    /// ]?;
+    ///
+    /// let mut scaler = MinMaxScaler::new((0.0, 1.0));
+    /// scaler.fit(&df, &["age", "income"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// **Using with StandardScaler:**
+    /// ```
+    /// # use mlrs::dataset::preprocesser::scaler::standard::StandardScaler;
+    /// # use polars::prelude::*;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut df = df!["feature" => [1.0, 2.0, 3.0, 4.0]]?;
+    /// let mut scaler = StandardScaler::new();
+    /// scaler.fit(&df, &["feature"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// **Edge case — mixed numeric/non-numeric columns:**
+    /// ```
+    /// # use mlrs::dataset::preprocesser::scaler::MinMaxScaler;
+    /// # use polars::prelude::*;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let df = df![
+    ///     "numeric" => [1.0, 2.0, 3.0],
+    ///     "categorical" => ["a", "b", "c"]
+    /// ]?;
+    ///
+    /// let mut scaler = MinMaxScaler::new((0.0, 1.0));
+    /// // Only "numeric" will be fitted; warning printed for "categorical"
+    /// let _ = scaler.fit(&df, &["numeric", "categorical"]);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn fit(
         &mut self,
         dataframe: &DataFrame,
@@ -57,6 +125,9 @@ impl<T: Scaling + Sync> Scaler<T> {
         Ok(())
     }
 
+    /// Transforms the DataFrame in-place using previously fitted statistics.
+    ///
+    /// Requires a prior call to `.fit()` or `.fit_transform()`.
     pub fn transform(&self, dataframe: &mut DataFrame) -> Result<(), PreprocessingError> {
         if !self.fitted {
             let error = PreprocessingError::NotFitted;
@@ -101,6 +172,7 @@ impl<T: Scaling + Sync> Scaler<T> {
         Ok(())
     }
 
+    /// Convenience method that fits and then transforms the data in one step.
     pub fn fit_transform(
         &mut self,
         dataframe: &mut DataFrame,

@@ -1,6 +1,6 @@
 [package]
 name = "mlrs"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["KartikAg13"]
@@ -22,7 +22,7 @@ criterion = "0.8.2"
 tempfile = "3.26.0"
 
 [profile.dev]
-opt-level = 0
+opt-level = 3
 debug = true
 incremental = true
 codegen-units = 256
@@ -33,6 +33,12 @@ debug = true
 incremental = true
 codegen-units = 256
 
+[profile.bench]
+debug = true
+opt-level = 3
+lto = true
+codegen-units = 1
+
 [[bench]]
-name = "load_csv_bench"
+name = "preprocessing_benches"
 harness = false

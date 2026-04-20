@@ -1,9 +1,30 @@
+//! Dataset loading utilities for ML pipelines.
+//!
+//! This module provides a convenient and configurable way to load CSV files into
+//! [`polars::prelude::DataFrame`] with sensible defaults optimized for machine learning workloads.
+//!
+//! # Quick Start
+//!
+//! ```
+//! use mlrs::dataset::read_csv;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # let filepath = "tests/fixtures/sample.csv";
+//! let df = read_csv(filepath);
+//! println!("Loaded dataset with {} rows and {} columns", df.height(), df.width());
+//! # Ok(())
+//! # }
+//! ```
+
 use std::path::PathBuf;
 
 use polars::prelude::*;
 
 pub mod preprocesser;
 
+/// Configuration builder for reading CSV files.
+///
+/// This struct allows fine-grained control over how Polars reads CSV files.
+/// It uses the builder pattern for ergonomic configuration.
 pub struct CSVConfig {
     filepath: PathBuf,
     has_header: Option<bool>,
@@ -15,6 +36,42 @@ pub struct CSVConfig {
 }
 
 impl CSVConfig {
+    /// Creates a new `CSVConfig` with sensible defaults for ML datasets.
+    ///
+    /// # Defaults
+    ///
+    /// - `has_header`: `true`
+    /// - `rechunk`: `false`
+    /// - `low_memory`: `false`
+    /// - `chunk_size`: 524288 (512 KiB)
+    /// - `ignore_errors`: `false`
+    ///
+    /// # Examples
+    ///
+    /// **Basic usage:**
+    /// ```
+    /// use mlrs::dataset::CSVConfig;
+    ///
+    /// let config = CSVConfig::new("data/train.csv");
+    /// ```
+    ///
+    /// **With custom options:**
+    /// ```
+    /// # use mlrs::dataset::CSVConfig;
+    /// let config = CSVConfig::new("data/large.csv")
+    ///     .with_has_header(true)
+    ///     .with_n_threads(8)
+    ///     .with_chunk_size(1 << 20)
+    ///     .with_ignore_errors(false);
+    /// ```
+    ///
+    /// **Edge case — minimal configuration (no header):**
+    /// ```
+    /// # use mlrs::dataset::CSVConfig;
+    /// let config = CSVConfig::new("data/no_header.csv")
+    ///     .with_has_header(false)
+    ///     .with_ignore_errors(true);
+    /// ```
     pub fn new(filepath: impl Into<PathBuf>) -> Self {
         Self {
             filepath: filepath.into(),
@@ -88,6 +145,7 @@ impl Default for CSVConfig {
     }
 }
 
+/// Unified way to specify CSV input — either a simple path or a full [`CSVConfig`].
 pub enum CSVRead {
     Filepath(PathBuf),
     Config(CSVConfig),
@@ -120,6 +178,41 @@ fn load_csv(read: impl Into<CSVRead>) -> PolarsResult<DataFrame> {
     load(config)
 }
 
+/// Reads a CSV file into a [`DataFrame`] using the provided configuration.
+///
+/// This is the main entry point for loading datasets in `mlrs`.
+///
+/// # Examples
+///
+/// **Simple usage with path:**
+/// ```
+/// use mlrs::dataset::read_csv;
+/// # let filepath = "tests/fixtures/sample.csv";
+/// let df = read_csv(filepath);
+/// assert!(df.height() > 0);
+/// ```
+///
+/// **Using custom configuration:**
+/// ```
+/// # use mlrs::dataset::{CSVConfig, read_csv};
+/// # let filepath = "tests/fixtures/sample.csv";
+/// let df = read_csv(
+///     CSVConfig::new(filepath)
+///         .with_has_header(true)
+///         .with_n_threads(4)
+/// );
+/// ```
+///
+/// **Edge case — file with no header and error tolerance:**
+/// ```
+/// # use mlrs::dataset::{CSVConfig, read_csv};
+/// # let filepath = "tests/fixtures/sample.csv";
+/// let df = read_csv(
+///     CSVConfig::new(filepath)
+///         .with_has_header(false)
+///         .with_ignore_errors(true)
+/// );
+/// ```
 pub fn read_csv(read: impl Into<CSVRead>) -> DataFrame {
     load_csv(read).expect("Failed to load csv")
 }
@@ -135,15 +228,15 @@ fn load(config: CSVConfig) -> PolarsResult<DataFrame> {
         .try_into_reader_with_file_path(Some(config.filepath.clone()))?
         .finish()?;
 
-    println!(
-        "Dataset has {} rows and {} columns",
-        dataframe.height(),
-        dataframe.width()
-    );
-    let schema = dataframe.schema();
-    for (name, datatype) in schema.iter() {
-        println!("Column: {}, Datatype: {:?}", name, datatype);
-    }
+    // println!(
+    //     "Dataset has {} rows and {} columns",
+    //     dataframe.height(),
+    //     dataframe.width()
+    // );
+    // let schema = dataframe.schema();
+    // for (name, datatype) in schema.iter() {
+    //     println!("Column: {}, Datatype: {:?}", name, datatype);
+    // }
 
     Ok(dataframe)
 }

@@ -1,21 +1,108 @@
+//! Simple imputation strategies for missing values.
+//!
+//! [`SimpleImputer`] provides a convenient way to fill null values in
+//! selected columns using common statistical or constant strategies.
+//! It works directly on `polars::DataFrame` and integrates well with
+//! the rest of the preprocessing pipeline.
+
 use polars::prelude::*;
 
 use crate::dataset::preprocesser::PreprocessingError;
 
-#[derive(Debug, Clone)]
+/// Imputation strategy for missing values.
+///
+/// These strategies map directly to Polars' [`FillNullStrategy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
+    /// Replace nulls with the mean of the column (numeric only).
     Mean,
+    /// Replace nulls with 0.
     Zero,
+    /// Replace nulls with 1.
     One,
+    /// Replace nulls with the minimum value of the column.
     MinimumValue,
+    /// Replace nulls with the maximum value of the column.
     MaximumValue,
+    /// Forward fill (last observation carried forward).
     ForwardFill,
+    /// Backward fill (next observation carried backward).
     BackwardFill,
 }
 
+/// Simple imputer for filling missing values in a DataFrame.
+///
+/// This struct is intentionally stateless (no `.fit()` needed) because
+/// most strategies compute statistics on-the-fly during filling.
+///
+/// # Examples
+///
+/// **Basic usage with multiple strategies:**
+/// ```
+/// use mlrs::dataset::preprocesser::handler::{SimpleImputer, Strategy};
+/// use polars::prelude::*;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df![
+///     "age"    => [Some(25.0), None, Some(35.0), Some(40.0)],
+///     "income" => [Some(50000.0), Some(60000.0), None, Some(80000.0)]
+/// ]?;
+///
+/// SimpleImputer::fill_null(&mut df, &[
+///     ("age", Strategy::Mean),
+///     ("income", Strategy::Zero),
+/// ])?;
+///
+/// // Nulls have been replaced according to the chosen strategies
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Using constant and fill strategies:**
+/// ```
+/// # use mlrs::dataset::preprocesser::handler::{SimpleImputer, Strategy};
+/// # use polars::prelude::*;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df![
+///     "score" => [Some(85.0), None, Some(92.0), None],
+///     "category" => [Some("A"), None, Some("B"), Some("A")]
+/// ]?;
+///
+/// SimpleImputer::fill_null(&mut df, &[
+///     ("score", Strategy::Mean),
+///     ("category", Strategy::ForwardFill),
+/// ])?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Edge case — column with all nulls:**
+/// ```
+/// # use mlrs::dataset::preprocesser::handler::{SimpleImputer, Strategy};
+/// # use polars::prelude::*;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df![
+///     "all_null" => [Option::<f64>::None, None, None]
+/// ]?;
+///
+/// // Mean of empty column falls back gracefully
+/// SimpleImputer::fill_null(&mut df, &[("all_null", Strategy::Mean)])?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct SimpleImputer;
 
 impl SimpleImputer {
+    /// Fills null values in the specified columns using the given strategies.
+    ///
+    /// Columns that do not exist will emit a warning and be skipped.
+    /// If a Polars error occurs during filling, it is converted to
+    /// [`PreprocessingError`] and the operation aborts.
+    ///
+    /// # Arguments
+    ///
+    /// * `dataframe` - Mutable reference to the DataFrame to modify in-place.
+    /// * `columns` - Slice of `(column_name, strategy)` pairs.
     pub fn fill_null(
         dataframe: &mut DataFrame,
         columns: &[(&str, Strategy)],

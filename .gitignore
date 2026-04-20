@@ -16,3 +16,6 @@ Thumbs.db
 EOF
 
 **/sample_1M.csv
+
+*.svg
+*.data*

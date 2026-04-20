@@ -1,15 +1,83 @@
+//! Label encoding for categorical features.
+//!
+//! [`LabelEncoder`] maps each unique string category to a unique integer.
+//! This is useful for ordinal or tree-based models that can handle integer
+//! categorical data efficiently.
+//!
+//! The encoder learns the mapping during `.fit()` / `.fit_transform()` and
+//! reuses it during `.transform()`. Unseen labels during transform are mapped
+//! to `u32::MAX` (a clear sentinel value).
+
 use polars::prelude::*;
 use std::collections::HashMap;
 
 use crate::dataset::preprocesser::encoder::{Encoder, EncodingStrategy, PreprocessingError};
 
+/// Configuration for label encoding.
+///
+/// Stores a per-column mapping from category string to integer label.
+#[derive(Debug, Default)]
 pub struct LabelConfig {
     pub mapping: HashMap<String, HashMap<String, u32>>,
 }
 
+/// Convenient type alias for a fully configured label encoder.
+///
+/// # Examples
+///
+/// **Basic usage:**
+/// ```
+/// use mlrs::dataset::preprocesser::encoder::label::LabelEncoder;
+/// use polars::prelude::*;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df![
+///     "animal" => ["cat", "dog", "cat", "bird"]
+/// ]?;
+///
+/// let mut encoder = LabelEncoder::new();
+/// encoder.fit_transform(&mut df, &["animal"])?;
+///
+/// // "cat" -> 0, "dog" -> 1, "bird" -> 2 (order depends on first appearance)
+/// assert!(df.column("animal")?.u32()?.get(0) == Some(0));
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Separate fit and transform (recommended for train/test split):**
+/// ```
+/// # use mlrs::dataset::preprocesser::encoder::label::LabelEncoder;
+/// # use polars::prelude::*;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut train = df!["color" => ["red", "blue", "red", "green"]]?;
+/// let mut test  = df!["color" => ["blue", "red", "yellow"]]?;  // "yellow" is unseen
+///
+/// let mut encoder = LabelEncoder::new();
+/// encoder.fit(&train, &["color"])?;
+/// encoder.transform(&mut test, &["color"])?;
+///
+/// // "yellow" becomes u32::MAX
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Edge case — empty column (all nulls):**
+/// ```
+/// # use mlrs::dataset::preprocesser::encoder::label::LabelEncoder;
+/// # use polars::prelude::*;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df!["empty" => [Option::<&str>::None, None, None]]?;
+///
+/// let mut encoder = LabelEncoder::new();
+/// // No categories learned → mapping remains empty
+/// encoder.fit(&df, &["empty"])?;
+/// # Ok(())
+/// # }
+/// ```
 pub type LabelEncoder = Encoder<LabelConfig>;
 
 impl LabelEncoder {
+    /// Creates a new unfitted [`LabelEncoder`].
     pub fn new() -> Self {
         Self {
             fitted: false,

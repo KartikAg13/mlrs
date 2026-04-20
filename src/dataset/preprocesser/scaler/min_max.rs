@@ -1,3 +1,9 @@
+//! Min-max scaling (also known as normalization).
+//!
+//! Scales each feature to a given range, typically `[0, 1]`. This is especially
+//! useful for algorithms that are sensitive to the scale of input features
+//! (e.g. neural networks, k-NN, SVM with RBF kernel).
+
 use polars::prelude::*;
 use std::collections::HashMap;
 
@@ -6,7 +12,10 @@ use crate::dataset::preprocesser::{
     scaler::{Scaler, Scaling},
 };
 
+/// Configuration for min-max scaling.
+#[derive(Debug, Clone)]
 pub struct MinMaxConfig {
+    /// Desired output range (default: `(0.0, 1.0)`)
     pub feature_range: (f64, f64),
 }
 
@@ -18,9 +27,57 @@ impl Default for MinMaxConfig {
     }
 }
 
+/// Convenient type alias for a fully configured min-max scaler.
+///
+/// # Examples
+///
+/// **Scale to default [0, 1] range:**
+/// ```
+/// use mlrs::dataset::preprocesser::scaler::min_max::MinMaxScaler;
+/// use polars::prelude::*;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df![
+///     "feature1" => [10.0, 20.0, 30.0],
+///     "feature2" => [100.0, 200.0, 300.0]
+/// ]?;
+///
+/// let mut scaler = MinMaxScaler::new((0.0, 1.0));
+/// scaler.fit_transform(&mut df, &["feature1", "feature2"])?;
+///
+/// // After scaling, all values are between 0.0 and 1.0
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Custom range (e.g. [-1, 1]):**
+/// ```
+/// # use mlrs::dataset::preprocesser::scaler::min_max::MinMaxScaler;
+/// # use polars::prelude::*;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df!["x" => [-5.0, 0.0, 5.0]]?;
+/// let mut scaler = MinMaxScaler::new((-1.0, 1.0));
+/// scaler.fit_transform(&mut df, &["x"])?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Edge case — constant column (min == max):**
+/// ```
+/// # use mlrs::dataset::preprocesser::scaler::min_max::MinMaxScaler;
+/// # use polars::prelude::*;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df!["constant" => [7.0, 7.0, 7.0]]?;
+/// let mut scaler = MinMaxScaler::new((0.0, 1.0));
+/// scaler.fit_transform(&mut df, &["constant"])?;
+/// // Constant columns are scaled to 0.0 with a warning
+/// # Ok(())
+/// # }
+/// ```
 pub type MinMaxScaler = Scaler<MinMaxConfig>;
 
 impl MinMaxScaler {
+    /// Creates a new [`MinMaxScaler`] with the desired output range.
     pub fn new(feature_range: (f64, f64)) -> Self {
         Self {
             stats: HashMap::new(),

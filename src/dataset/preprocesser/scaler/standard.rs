@@ -1,3 +1,9 @@
+//! Standard scaling (z-score normalization).
+//!
+//! Transforms features to have zero mean and unit variance.
+//! This is the most commonly used scaler for many machine learning algorithms
+//! (linear models, neural networks, PCA, etc.).
+
 use polars::prelude::*;
 use std::collections::HashMap;
 
@@ -6,11 +12,59 @@ use crate::dataset::preprocesser::{
     scaler::{Scaler, Scaling},
 };
 
+/// Marker config for standard scaling (mean = 0, std = 1).
+#[derive(Debug, Clone, Copy, Default)]
 pub struct StandardConfig;
 
+/// Convenient type alias for a fully configured standard scaler.
+///
+/// # Examples
+///
+/// **Basic usage:**
+/// ```
+/// use mlrs::dataset::preprocesser::scaler::standard::StandardScaler;
+/// use polars::prelude::*;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df![
+///     "height" => [160.0, 170.0, 180.0, 190.0],
+///     "weight" => [55.0, 65.0, 75.0, 85.0]
+/// ]?;
+///
+/// let mut scaler = StandardScaler::new();
+/// scaler.fit_transform(&mut df, &["height", "weight"])?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Chained with other preprocessing steps:**
+/// ```
+/// # use mlrs::dataset::preprocesser::scaler::standard::StandardScaler;
+/// # use polars::prelude::*;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df!["x" => [1.0, 2.0, 3.0, 4.0, 100.0]]?;
+/// let mut scaler = StandardScaler::new();
+/// scaler.fit_transform(&mut df, &["x"])?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// **Edge case — column with zero variance:**
+/// ```
+/// # use mlrs::dataset::preprocesser::scaler::standard::StandardScaler;
+/// # use polars::prelude::*;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut df = df!["constant" => [5.0, 5.0, 5.0, 5.0]]?;
+/// let mut scaler = StandardScaler::new();
+/// scaler.fit_transform(&mut df, &["constant"])?;
+/// // std becomes 1.0 (with warning) to avoid division by zero
+/// # Ok(())
+/// # }
+/// ```
 pub type StandardScaler = Scaler<StandardConfig>;
 
 impl StandardScaler {
+    /// Creates a new [`StandardScaler`].
     pub fn new() -> Self {
         Self {
             stats: HashMap::new(),

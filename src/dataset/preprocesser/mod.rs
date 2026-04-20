@@ -1,3 +1,9 @@
+//! Preprocessing utilities for machine learning datasets.
+//!
+//! This module contains tools for handling missing values, scaling features,
+//! and encoding categorical variables — all designed to work seamlessly with
+//! Polars `DataFrame`s.
+
 pub mod encoder;
 pub mod handler;
 pub mod scaler;
@@ -6,6 +12,7 @@ use colored::Colorize;
 use polars::prelude::*;
 use thiserror::Error;
 
+/// Errors that can occur during preprocessing operations.
 #[derive(Debug, Error)]
 pub enum PreprocessingError {
     #[error("Column not fitted yet. Call .fit() or .fit_transform() before .transform()")]
@@ -29,10 +36,12 @@ pub enum PreprocessingError {
 }
 
 impl PreprocessingError {
+    /// Prints the error in red with a bold "ERROR:" prefix.
     pub fn print_error(&self) {
         eprintln!("{}{}", "ERROR: ".red().bold(), self.to_string().red());
     }
 
+    /// Prints a warning in yellow.
     pub fn print_warning(message: String) {
         eprintln!(
             "{}{}{}",
@@ -43,6 +52,7 @@ impl PreprocessingError {
     }
 }
 
+/// Returns `true` if the given [`DataType`] is considered numeric for ML preprocessing.
 pub fn is_numeric(datatype: &DataType) -> bool {
     matches!(
         datatype,
@@ -55,6 +65,7 @@ pub fn is_numeric(datatype: &DataType) -> bool {
     )
 }
 
+/// Returns `true` if the given [`DataType`] is a string (categorical).
 pub fn is_categorical(datatype: &DataType) -> bool {
     matches!(datatype, DataType::String)
 }
