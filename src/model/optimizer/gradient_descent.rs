@@ -14,6 +14,7 @@ pub struct GradientDescent {
     pub alpha: f64,
     pub activation: Activation,
     pub fitted: bool,
+    pub y_predicted: Array1<f64>,
 
     y_pred_buffer: Array1<f64>,
     error_buffer: Array1<f64>,
@@ -41,13 +42,14 @@ impl GradientDescent {
             alpha,
             activation,
             fitted: false,
+            y_predicted: Array1::<f64>::zeros(0),
             y_pred_buffer: Array1::<f64>::zeros(0),
             error_buffer: Array1::<f64>::zeros(0),
             dw_buffer: Array1::<f64>::zeros(0),
         }
     }
 
-    pub fn fit(&mut self, x_train: &Array2<f64>, y_train: Array1<f64>) -> Result<(), ModelError> {
+    pub fn fit(&mut self, x_train: &Array2<f64>, y_train: &Array1<f64>) -> Result<(), ModelError> {
         let (n_samples, n_features) = x_train.dim();
 
         if n_samples != y_train.len() {
@@ -80,7 +82,7 @@ impl GradientDescent {
             self.y_pred_buffer
                 .mapv_inplace(|prediction| self.activation.apply(prediction + self.bias));
 
-            azip!((error in &mut self.error_buffer, &pred in &self.y_pred_buffer, &actual in &y_train) {
+            azip!((error in &mut self.error_buffer, &pred in &self.y_pred_buffer, &actual in y_train) {
                 *error = pred - actual;
             });
 
@@ -129,7 +131,7 @@ impl GradientDescent {
         Ok(())
     }
 
-    pub fn predict(&self, x_test: &Array2<f64>) -> Result<Array1<f64>, ModelError> {
+    pub fn predict(&mut self, x_test: &Array2<f64>) -> Result<Array1<f64>, ModelError> {
         if !self.fitted {
             let error = ModelError::NotFitted;
             error.print_error();
@@ -146,6 +148,7 @@ impl GradientDescent {
         let mut y_predicted = Array1::<f64>::zeros(n_features);
         ndarray::linalg::general_mat_vec_mul(1.0, x_test, &self.weights, 0.0, &mut y_predicted);
         y_predicted.mapv_inplace(|prediction| self.activation.apply(prediction + self.bias));
+        self.y_predicted = y_predicted.clone();
         Ok(y_predicted)
     }
 }

@@ -28,4 +28,8 @@ impl ModelError {
             " Skipping!".yellow()
         );
     }
+
+    pub fn print_modifying(message: String) {
+        println!("{}{}", "MODIFYING: ".green(), message.green());
+    }
 }
