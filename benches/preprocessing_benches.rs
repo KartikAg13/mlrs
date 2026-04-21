@@ -39,7 +39,7 @@ fn make_small_test_df() -> DataFrame {
     .unwrap()
 }
 
-const LARGE_CSV: &str = "tests/fixtures/sample_1M.csv";
+const LARGE_CSV: &str = "tests/fixtures/sample.csv";
 const NUMERIC_COLS: [&str; 2] = ["loan_amnt", "annual_inc"];
 const CATEGORICAL_COLS: [&str; 2] = ["grade", "home_ownership"];
 
@@ -50,7 +50,7 @@ const CATEGORICAL_COLS: [&str; 2] = ["grade", "home_ownership"];
 fn bench_csv_loading(c: &mut Criterion) {
     let mut group = c.benchmark_group("csv_loading");
 
-    group.bench_function("read_csv_1M_rows", |b| {
+    group.bench_function("read_csv_rows", |b| {
         b.iter(|| {
             let cfg = CSVConfig::new(black_box(LARGE_CSV))
                 .with_ignore_errors(true)

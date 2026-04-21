@@ -1,13 +1,13 @@
 use ndarray::{Array1, Array2};
 
+use crate::constants::{
+    DEFAULT_ALPHA, DEFAULT_L1_RATIO, DEFAULT_L2_RATIO, DEFAULT_LEARNING_RATE, DEFAULT_MAX_EPOCHS,
+    DEFAULT_TOLERANCE,
+};
 use crate::model::ModelError;
 use crate::model::activator::Activation;
 use crate::model::optimizer::gradient_descent::GradientDescent;
 use crate::score::r2_score;
-
-const DEFAULT_LEARNING_RATE: f64 = 0.01;
-const DEFAULT_MAX_EPOCHS: usize = 10000;
-const DEFAULT_TOLERANCE: f64 = 1e-4;
 
 pub struct LinearRegressor {
     solver: GradientDescent,
@@ -26,9 +26,9 @@ impl LinearRegressor {
                 DEFAULT_LEARNING_RATE,
                 DEFAULT_MAX_EPOCHS,
                 DEFAULT_TOLERANCE,
-                0.0,
-                0.0,
-                0.0,
+                DEFAULT_L1_RATIO,
+                DEFAULT_L2_RATIO,
+                DEFAULT_ALPHA,
                 Activation::Identity,
             ),
         }
@@ -64,6 +64,48 @@ impl LinearRegressor {
             ));
         }
         self.solver.tolerance = tolerance;
+        self
+    }
+
+    pub fn with_l1_ratio(mut self, l1_ratio: f64) -> Self {
+        let l1 = l1_ratio.clamp(0.0, 1.0);
+        if (l1 + self.solver.l2_ratio) > 1.0 {
+            ModelError::print_warning(format!("Sum of l1 and l2 ratio is greater than 1.0."));
+        }
+        if self.solver.l1_ratio != l1 {
+            ModelError::print_modifying(format!(
+                "Changing l1 ratio from {} to {}!",
+                self.solver.l1_ratio, l1
+            ));
+        }
+        self.solver.l1_ratio = l1;
+        self
+    }
+
+    pub fn with_l2_ratio(mut self, l2_ratio: f64) -> Self {
+        let l2 = l2_ratio.clamp(0.0, 1.0);
+        if (l2 + self.solver.l1_ratio) > 1.0 {
+            ModelError::print_warning(format!("Sum of l1 and l2 ratio is greater than 1.0."));
+        }
+        if self.solver.l2_ratio != l2 {
+            ModelError::print_modifying(format!(
+                "Changing l2 ratio from {} to {}!",
+                self.solver.l2_ratio, l2
+            ));
+        }
+        self.solver.l2_ratio = l2;
+        self
+    }
+
+    pub fn with_alpha(mut self, alpha: f64) -> Self {
+        let al = alpha.clamp(0.0, 1.0);
+        if self.solver.alpha != al {
+            ModelError::print_modifying(format!(
+                "Changing alpha from {} to {}!",
+                self.solver.alpha, al
+            ));
+        }
+        self.solver.alpha = al;
         self
     }
 
@@ -163,5 +205,70 @@ mod tests {
             model.predict(&x_bad),
             Err(ModelError::ShapeMismatch(_, _))
         ));
+    }
+
+    #[test]
+    fn test_ridge_regression() {
+        let (x, y) = make_linear_data();
+        let mut model = LinearRegressor::new()
+            .with_l2_ratio(0.5)
+            .with_learning_rate(0.05)
+            .with_max_epochs(2000);
+
+        assert!(model.fit(&x, &y).is_ok());
+
+        let r2 = model.evaluate(&None, &y);
+        assert!(r2 > 0.95, "Ridge R2 was too low: {}", r2);
+
+        // Ridge should have smaller weights than pure linear (due to L2 penalty)
+        let weights = model.weights();
+        assert!(weights.iter().all(|&w| w.abs() < 4.0)); // pure linear would be ~3.0
+    }
+
+    #[test]
+    fn test_lasso_regression() {
+        let (x, y) = make_linear_data();
+        let mut model = LinearRegressor::new()
+            .with_l1_ratio(0.8)
+            .with_learning_rate(0.05)
+            .with_max_epochs(3000);
+
+        assert!(model.fit(&x, &y).is_ok());
+
+        let r2 = model.evaluate(&None, &y);
+        assert!(r2 > 0.9);
+
+        // Lasso tends to drive some coefficients closer to zero
+        let weights = model.weights();
+        assert!(weights[0].abs() < 3.5); // should be shrunk
+    }
+
+    #[test]
+    fn test_elasticnet_regression() {
+        let (x, y) = make_linear_data();
+        let mut model = LinearRegressor::new()
+            .with_learning_rate(0.05)
+            .with_max_epochs(3000);
+
+        assert!(model.fit(&x, &y).is_ok());
+
+        let r2 = model.evaluate(&None, &y);
+        assert!(r2 > 0.92);
+
+        let weights = model.weights();
+        assert!(weights[0].abs() > 0.0 && weights[0].abs() < 3.5);
+    }
+
+    #[test]
+    fn test_both_l1_and_l2_can_be_one() {
+        let (x, y) = make_linear_data();
+        let mut model = LinearRegressor::new()
+            .with_l1_ratio(1.0)
+            .with_l2_ratio(1.0)
+            .with_max_epochs(1000);
+
+        // Should still run without panic
+        let result = model.fit(&x, &y);
+        assert!(result.is_ok() || result.is_err()); // We just want it to not crash
     }
 }

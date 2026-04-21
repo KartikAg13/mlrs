@@ -14,3 +14,12 @@ pub fn r2_score(y_true: &Array1<f64>, y_pred: &Array1<f64>) -> f64 {
         1.0 - ss_res / ss_tot
     }
 }
+
+pub fn accuracy(y_true: &Array1<f64>, y_pred: &Array1<f64>) -> f64 {
+    let correct = y_true
+        .iter()
+        .zip(y_pred.iter())
+        .filter(|(t, p)| t == p)
+        .count();
+    correct as f64 / y_true.len() as f64
+}
