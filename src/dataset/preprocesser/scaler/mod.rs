@@ -17,7 +17,8 @@ use std::{collections::HashMap, sync::Mutex};
 
 pub mod min_max;
 pub mod standard;
-use crate::dataset::preprocesser::{PreprocessingError, is_numeric};
+use crate::dataset::preprocesser::error::PreprocessingError;
+use crate::dataset::preprocesser::utils::is_numeric;
 
 /// Common trait for all scaling strategies.
 ///

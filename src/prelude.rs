@@ -5,6 +5,6 @@ pub use crate::dataset::preprocesser::encoder::{LabelEncoder, OneHotEncoder};
 pub use crate::dataset::preprocesser::handler::{SimpleImputer, Strategy};
 pub use crate::dataset::preprocesser::scaler::{MinMaxScaler, StandardScaler};
 
-pub use crate::dataset::preprocesser::PreprocessingError;
+pub use crate::dataset::preprocesser::error::PreprocessingError;
 
 pub use polars::prelude::DataFrame;

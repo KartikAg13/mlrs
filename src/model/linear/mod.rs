@@ -1,23 +1,19 @@
-use ndarray::{Array1, Array2};
+use ndarray::Array1;
 
 use crate::constants::{
     DEFAULT_ALPHA, DEFAULT_L1_RATIO, DEFAULT_L2_RATIO, DEFAULT_LEARNING_RATE, DEFAULT_MAX_EPOCHS,
     DEFAULT_TOLERANCE,
 };
-use crate::model::ModelError;
+use crate::model::ModelHandler;
+use crate::model::ModelingStrategy;
 use crate::model::activator::Activation;
 use crate::model::optimizer::gradient_descent::GradientDescent;
 use crate::score::r2_score;
 
-pub struct LinearRegressor {
-    solver: GradientDescent,
-}
+#[derive(Debug, Default)]
+pub struct LinearConfig;
 
-impl Default for LinearRegressor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub type LinearRegressor = ModelHandler<LinearConfig>;
 
 impl LinearRegressor {
     pub fn new() -> Self {
@@ -31,118 +27,32 @@ impl LinearRegressor {
                 DEFAULT_ALPHA,
                 Activation::Identity,
             ),
+            config: LinearConfig,
         }
     }
+}
 
-    pub fn with_learning_rate(mut self, learning_rate: f64) -> Self {
-        if self.solver.learning_rate != learning_rate {
-            ModelError::print_modifying(format!(
-                "Changing learning rate from {} to {}!",
-                self.solver.learning_rate, learning_rate
-            ));
-        }
-        self.solver.learning_rate = learning_rate;
-        self
+impl Default for LinearRegressor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ModelingStrategy for LinearConfig {
+    fn activation(&self) -> &Activation {
+        &Activation::Identity
     }
 
-    pub fn with_max_epochs(mut self, max_epochs: usize) -> Self {
-        if self.solver.max_epochs != max_epochs {
-            ModelError::print_modifying(format!(
-                "Changing max epochs from {} to {}!",
-                self.solver.max_epochs, max_epochs
-            ));
-        }
-        self.solver.max_epochs = max_epochs;
-        self
-    }
-
-    pub fn with_tolerance(mut self, tolerance: f64) -> Self {
-        if self.solver.tolerance != tolerance {
-            ModelError::print_modifying(format!(
-                "Changing tolerance from {} to {}!",
-                self.solver.tolerance, tolerance
-            ));
-        }
-        self.solver.tolerance = tolerance;
-        self
-    }
-
-    pub fn with_l1_ratio(mut self, l1_ratio: f64) -> Self {
-        let l1 = l1_ratio.clamp(0.0, 1.0);
-        if (l1 + self.solver.l2_ratio) > 1.0 {
-            ModelError::print_warning(format!("Sum of l1 and l2 ratio is greater than 1.0."));
-        }
-        if self.solver.l1_ratio != l1 {
-            ModelError::print_modifying(format!(
-                "Changing l1 ratio from {} to {}!",
-                self.solver.l1_ratio, l1
-            ));
-        }
-        self.solver.l1_ratio = l1;
-        self
-    }
-
-    pub fn with_l2_ratio(mut self, l2_ratio: f64) -> Self {
-        let l2 = l2_ratio.clamp(0.0, 1.0);
-        if (l2 + self.solver.l1_ratio) > 1.0 {
-            ModelError::print_warning(format!("Sum of l1 and l2 ratio is greater than 1.0."));
-        }
-        if self.solver.l2_ratio != l2 {
-            ModelError::print_modifying(format!(
-                "Changing l2 ratio from {} to {}!",
-                self.solver.l2_ratio, l2
-            ));
-        }
-        self.solver.l2_ratio = l2;
-        self
-    }
-
-    pub fn with_alpha(mut self, alpha: f64) -> Self {
-        let al = alpha.clamp(0.0, 1.0);
-        if self.solver.alpha != al {
-            ModelError::print_modifying(format!(
-                "Changing alpha from {} to {}!",
-                self.solver.alpha, al
-            ));
-        }
-        self.solver.alpha = al;
-        self
-    }
-
-    pub fn fit(&mut self, x_train: &Array2<f64>, y_train: &Array1<f64>) -> Result<(), ModelError> {
-        self.solver.fit(x_train, y_train)
-    }
-
-    pub fn predict(&mut self, x_test: &Array2<f64>) -> Result<Array1<f64>, ModelError> {
-        self.solver.predict(x_test)
-    }
-
-    pub fn evaluate(&mut self, x_test: &Option<Array2<f64>>, y_test: &Array1<f64>) -> f64 {
-        match x_test {
-            Some(x) => match self.solver.predict(x) {
-                Ok(_) => r2_score(y_test, &self.solver.y_predicted),
-                Err(error) => {
-                    error.print_error();
-                    -1.0
-                }
-            },
-            None => r2_score(y_test, &self.solver.y_predicted),
-        }
-    }
-
-    pub fn weights(&self) -> Array1<f64> {
-        self.solver.weights.clone()
-    }
-
-    pub fn bias(&self) -> f64 {
-        self.solver.bias
+    fn score(&self, y_true: &Array1<f64>, y_pred: &Array1<f64>) -> f64 {
+        r2_score(y_true, y_pred)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::array;
+    use crate::model::ModelError;
+    use ndarray::{Array1, Array2, array};
     fn make_linear_data() -> (Array2<f64>, Array1<f64>) {
         let x = Array2::from_shape_vec((5, 1), vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
         let y = array![10.0, 13.0, 16.0, 19.0, 22.0]; // 3x + 7

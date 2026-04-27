@@ -11,7 +11,8 @@
 use polars::prelude::*;
 use std::collections::HashMap;
 
-use crate::dataset::preprocesser::encoder::{Encoder, EncodingStrategy, PreprocessingError};
+use crate::dataset::preprocesser::encoder::{Encoder, EncodingStrategy};
+use crate::dataset::preprocesser::error::PreprocessingError;
 
 /// Configuration for label encoding.
 ///

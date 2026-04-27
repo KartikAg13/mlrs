@@ -7,10 +7,8 @@
 use polars::prelude::*;
 use std::collections::HashMap;
 
-use crate::dataset::preprocesser::{
-    PreprocessingError,
-    scaler::{Scaler, Scaling},
-};
+use crate::dataset::preprocesser::error::PreprocessingError;
+use crate::dataset::preprocesser::scaler::{Scaler, Scaling};
 
 /// Marker config for standard scaling (mean = 0, std = 1).
 #[derive(Debug, Clone, Copy, Default)]

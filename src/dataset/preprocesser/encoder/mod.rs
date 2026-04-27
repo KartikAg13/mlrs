@@ -11,7 +11,7 @@ use polars::prelude::*;
 
 pub mod label;
 pub mod one_hot;
-use crate::dataset::preprocesser::PreprocessingError;
+use crate::dataset::preprocesser::error::PreprocessingError;
 
 /// Common interface for all encoding strategies.
 pub trait EncodingStrategy {

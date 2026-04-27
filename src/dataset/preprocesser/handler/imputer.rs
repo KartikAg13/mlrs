@@ -7,7 +7,7 @@
 
 use polars::prelude::*;
 
-use crate::dataset::preprocesser::PreprocessingError;
+use crate::dataset::preprocesser::error::PreprocessingError;
 
 /// Imputation strategy for missing values.
 ///
