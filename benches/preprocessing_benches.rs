@@ -9,7 +9,7 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use mlrs::dataset::preprocesser::encoder::{LabelEncoder, OneHotEncoder};
-use mlrs::dataset::preprocesser::handler::{SimpleImputer, Strategy};
+use mlrs::dataset::preprocesser::handler::{ImputerStrategy, SimpleImputer};
 use mlrs::dataset::preprocesser::scaler::{MinMaxScaler, StandardScaler};
 use mlrs::dataset::{CSVConfig, read_csv};
 use polars::prelude::*;
@@ -169,8 +169,11 @@ fn bench_imputation(c: &mut Criterion) {
             || df_with_nulls.clone(),
             |mut df_clone| {
                 black_box(
-                    SimpleImputer::fill_null(&mut df_clone, &[("annual_inc", Strategy::Mean)])
-                        .unwrap(),
+                    SimpleImputer::fill_null(
+                        &mut df_clone,
+                        &[("annual_inc", ImputerStrategy::Mean)],
+                    )
+                    .unwrap(),
                 );
             },
             criterion::BatchSize::SmallInput,
@@ -192,7 +195,10 @@ fn bench_full_pipeline(c: &mut Criterion) {
             || df.clone(),
             |mut df_clone| {
                 // Impute
-                let _ = SimpleImputer::fill_null(&mut df_clone, &[("annual_inc", Strategy::Mean)]);
+                let _ = SimpleImputer::fill_null(
+                    &mut df_clone,
+                    &[("annual_inc", ImputerStrategy::Mean)],
+                );
 
                 // Encode
                 let mut label_encoder = LabelEncoder::new();

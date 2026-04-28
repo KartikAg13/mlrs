@@ -10,4 +10,5 @@
 pub mod dropper;
 pub mod imputer;
 
-pub use imputer::{SimpleImputer, Strategy};
+pub use dropper::{Dropper, DropperStrategy};
+pub use imputer::{ImputerStrategy, SimpleImputer};

@@ -13,7 +13,7 @@ use crate::dataset::preprocesser::error::PreprocessingError;
 ///
 /// These strategies map directly to Polars' [`FillNullStrategy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Strategy {
+pub enum ImputerStrategy {
     /// Replace nulls with the mean of the column (numeric only).
     Mean,
     /// Replace nulls with 0.
@@ -39,7 +39,7 @@ pub enum Strategy {
 ///
 /// **Basic usage with multiple strategies:**
 /// ```
-/// use mlrs::dataset::preprocesser::handler::{SimpleImputer, Strategy};
+/// use mlrs::dataset::preprocesser::handler::{SimpleImputer, ImputerStrategy};
 /// use polars::prelude::*;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,8 +49,8 @@ pub enum Strategy {
 /// ]?;
 ///
 /// SimpleImputer::fill_null(&mut df, &[
-///     ("age", Strategy::Mean),
-///     ("income", Strategy::Zero),
+///     ("age", ImputerStrategy::Mean),
+///     ("income", ImputerStrategy::Zero),
 /// ])?;
 ///
 /// // Nulls have been replaced according to the chosen strategies
@@ -60,7 +60,7 @@ pub enum Strategy {
 ///
 /// **Using constant and fill strategies:**
 /// ```
-/// # use mlrs::dataset::preprocesser::handler::{SimpleImputer, Strategy};
+/// # use mlrs::dataset::preprocesser::handler::{SimpleImputer, ImputerStrategy};
 /// # use polars::prelude::*;
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut df = df![
@@ -69,8 +69,8 @@ pub enum Strategy {
 /// ]?;
 ///
 /// SimpleImputer::fill_null(&mut df, &[
-///     ("score", Strategy::Mean),
-///     ("category", Strategy::ForwardFill),
+///     ("score", ImputerStrategy::Mean),
+///     ("category", ImputerStrategy::ForwardFill),
 /// ])?;
 /// # Ok(())
 /// # }
@@ -78,7 +78,7 @@ pub enum Strategy {
 ///
 /// **Edge case — column with all nulls:**
 /// ```
-/// # use mlrs::dataset::preprocesser::handler::{SimpleImputer, Strategy};
+/// # use mlrs::dataset::preprocesser::handler::{SimpleImputer, ImputerStrategy};
 /// # use polars::prelude::*;
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mut df = df![
@@ -86,7 +86,7 @@ pub enum Strategy {
 /// ]?;
 ///
 /// // Mean of empty column falls back gracefully
-/// SimpleImputer::fill_null(&mut df, &[("all_null", Strategy::Mean)])?;
+/// SimpleImputer::fill_null(&mut df, &[("all_null", ImputerStrategy::Mean)])?;
 /// # Ok(())
 /// # }
 /// ```
@@ -105,8 +105,11 @@ impl SimpleImputer {
     /// * `columns` - Slice of `(column_name, strategy)` pairs.
     pub fn fill_null(
         dataframe: &mut DataFrame,
-        columns: &[(&str, Strategy)],
+        columns: &[(&str, ImputerStrategy)],
     ) -> Result<(), PreprocessingError> {
+        if columns.is_empty() {
+            return Ok(());
+        }
         for (name, strategy) in columns {
             let index = match dataframe.get_column_index(name) {
                 Some(i) => i,
@@ -119,13 +122,13 @@ impl SimpleImputer {
             let column = dataframe.column(name)?;
 
             let strategy = match strategy {
-                Strategy::Mean => FillNullStrategy::Mean,
-                Strategy::MinimumValue => FillNullStrategy::Min,
-                Strategy::MaximumValue => FillNullStrategy::Max,
-                Strategy::Zero => FillNullStrategy::Zero,
-                Strategy::One => FillNullStrategy::One,
-                Strategy::ForwardFill => FillNullStrategy::Forward(None),
-                Strategy::BackwardFill => FillNullStrategy::Backward(None),
+                ImputerStrategy::Mean => FillNullStrategy::Mean,
+                ImputerStrategy::MinimumValue => FillNullStrategy::Min,
+                ImputerStrategy::MaximumValue => FillNullStrategy::Max,
+                ImputerStrategy::Zero => FillNullStrategy::Zero,
+                ImputerStrategy::One => FillNullStrategy::One,
+                ImputerStrategy::ForwardFill => FillNullStrategy::Forward(None),
+                ImputerStrategy::BackwardFill => FillNullStrategy::Backward(None),
             };
 
             let filled = match column.fill_null(strategy) {
@@ -166,7 +169,7 @@ mod tests {
     #[test]
     fn test_mean_fills_nulls() {
         let mut df = make_df();
-        SimpleImputer::fill_null(&mut df, &[("age", Strategy::Mean)]).unwrap();
+        SimpleImputer::fill_null(&mut df, &[("age", ImputerStrategy::Mean)]).unwrap();
         let col = df.column("age").unwrap().f64().unwrap();
         assert_eq!(col.null_count(), 0);
         // mean of [10, 30, 50] = 30.0
@@ -177,7 +180,7 @@ mod tests {
     #[test]
     fn test_min_fills_nulls() {
         let mut df = make_df();
-        SimpleImputer::fill_null(&mut df, &[("salary", Strategy::MinimumValue)]).unwrap();
+        SimpleImputer::fill_null(&mut df, &[("salary", ImputerStrategy::MinimumValue)]).unwrap();
         let col = df.column("salary").unwrap().f64().unwrap();
         assert_eq!(col.null_count(), 0);
         assert!((col.get(2).unwrap() - 100.0).abs() < 1e-6);
@@ -187,7 +190,7 @@ mod tests {
     #[test]
     fn test_max_fills_nulls() {
         let mut df = make_df();
-        SimpleImputer::fill_null(&mut df, &[("salary", Strategy::MaximumValue)]).unwrap();
+        SimpleImputer::fill_null(&mut df, &[("salary", ImputerStrategy::MaximumValue)]).unwrap();
         let col = df.column("salary").unwrap().f64().unwrap();
         assert_eq!(col.null_count(), 0);
         assert!((col.get(2).unwrap() - 400.0).abs() < 1e-6);
@@ -197,7 +200,7 @@ mod tests {
     #[test]
     fn test_zero_fills_nulls() {
         let mut df = make_df();
-        SimpleImputer::fill_null(&mut df, &[("age", Strategy::Zero)]).unwrap();
+        SimpleImputer::fill_null(&mut df, &[("age", ImputerStrategy::Zero)]).unwrap();
         let col = df.column("age").unwrap().f64().unwrap();
         assert_eq!(col.null_count(), 0);
         assert!((col.get(1).unwrap() - 0.0).abs() < 1e-6);
@@ -206,7 +209,7 @@ mod tests {
     #[test]
     fn test_one_fills_nulls() {
         let mut df = make_df();
-        SimpleImputer::fill_null(&mut df, &[("age", Strategy::One)]).unwrap();
+        SimpleImputer::fill_null(&mut df, &[("age", ImputerStrategy::One)]).unwrap();
         let col = df.column("age").unwrap().f64().unwrap();
         assert_eq!(col.null_count(), 0);
         assert!((col.get(1).unwrap() - 1.0).abs() < 1e-6);
@@ -215,7 +218,7 @@ mod tests {
     #[test]
     fn test_forward_fill() {
         let mut df = make_df();
-        SimpleImputer::fill_null(&mut df, &[("age", Strategy::ForwardFill)]).unwrap();
+        SimpleImputer::fill_null(&mut df, &[("age", ImputerStrategy::ForwardFill)]).unwrap();
         let col = df.column("age").unwrap().f64().unwrap();
         assert!((col.get(1).unwrap() - 10.0).abs() < 1e-6);
         assert!((col.get(3).unwrap() - 30.0).abs() < 1e-6);
@@ -224,7 +227,7 @@ mod tests {
     #[test]
     fn test_backward_fill() {
         let mut df = make_df();
-        SimpleImputer::fill_null(&mut df, &[("age", Strategy::BackwardFill)]).unwrap();
+        SimpleImputer::fill_null(&mut df, &[("age", ImputerStrategy::BackwardFill)]).unwrap();
         let col = df.column("age").unwrap().f64().unwrap();
         assert!((col.get(1).unwrap() - 30.0).abs() < 1e-6);
         assert!((col.get(3).unwrap() - 50.0).abs() < 1e-6);
@@ -236,9 +239,9 @@ mod tests {
         SimpleImputer::fill_null(
             &mut df,
             &[
-                ("age", Strategy::Mean),
-                ("salary", Strategy::Zero),
-                ("score", Strategy::ForwardFill),
+                ("age", ImputerStrategy::Mean),
+                ("salary", ImputerStrategy::Zero),
+                ("score", ImputerStrategy::ForwardFill),
             ],
         )
         .unwrap();
@@ -252,7 +255,10 @@ mod tests {
         let mut df = make_df();
         let result = SimpleImputer::fill_null(
             &mut df,
-            &[("age", Strategy::Mean), ("nonexistent", Strategy::Zero)],
+            &[
+                ("age", ImputerStrategy::Mean),
+                ("nonexistent", ImputerStrategy::Zero),
+            ],
         );
         assert!(result.is_ok());
         assert_eq!(df.column("age").unwrap().null_count(), 0);
@@ -262,7 +268,7 @@ mod tests {
     fn test_no_nulls_is_noop() {
         let mut df = df!["x" => [1.0_f64, 2.0, 3.0]].unwrap();
         let original = df.column("x").unwrap().clone();
-        SimpleImputer::fill_null(&mut df, &[("x", Strategy::Mean)]).unwrap();
+        SimpleImputer::fill_null(&mut df, &[("x", ImputerStrategy::Mean)]).unwrap();
         assert_eq!(df.column("x").unwrap(), &original);
     }
 }
