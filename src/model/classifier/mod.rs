@@ -5,6 +5,7 @@ use crate::constants::{
     DEFAULT_TOLERANCE,
 };
 use crate::model::activator::Activation;
+use crate::model::optimizer::Optimizer;
 use crate::model::optimizer::gradient_descent::GradientDescent;
 use crate::model::{ModelError, ModelHandler, ModelingStrategy};
 use crate::score::accuracy;
@@ -20,29 +21,6 @@ impl Default for LogisticConfig {
     }
 }
 
-/// Type alias for a logistic regression classifier.
-///
-/// # Examples
-///
-/// ```
-/// use mlrs::model::classifier::LogisticRegressor;
-/// use ndarray::{array, Array2};
-///
-/// let x = Array2::from_shape_vec((4, 1), vec![-2.0, -1.0, 1.0, 2.0]).unwrap();
-/// let y = array![0.0, 0.0, 1.0, 1.0];
-///
-/// let mut model = LogisticRegressor::new()
-///     .with_learning_rate(0.1)
-///     .with_max_epochs(1000);
-///
-/// model.fit(&x, &y).unwrap();
-///
-/// // Hard labels (0.0 or 1.0)
-/// let labels = model.predict(&x).unwrap();
-///
-/// // Raw probabilities
-/// let probs = model.predict_proba(&x).unwrap();
-/// ```
 pub type LogisticRegressor = ModelHandler<LogisticConfig>;
 
 impl LogisticRegressor {

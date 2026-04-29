@@ -1,3 +1,5 @@
+use ndarray::Array1;
+
 #[derive(Debug, Clone)]
 pub enum Activation {
     Identity,
@@ -15,6 +17,22 @@ impl Activation {
                     let ex = value.exp();
                     ex / (1.0 + ex)
                 }
+            }
+        }
+    }
+
+    pub fn apply_inplace(&self, arr: &mut Array1<f64>) {
+        match self {
+            Activation::Identity => {}
+            Activation::Sigmoid => {
+                arr.mapv_inplace(|x| {
+                    if x >= 0.0 {
+                        1.0 / (1.0 + (-x).exp())
+                    } else {
+                        let ex = x.exp();
+                        ex / (1.0 + ex)
+                    }
+                });
             }
         }
     }

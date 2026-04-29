@@ -5,6 +5,7 @@ use ndarray::{Array1, Array2};
 
 use crate::model::activator::Activation;
 use crate::model::error::ModelError;
+use crate::model::optimizer::Optimizer;
 use crate::model::optimizer::gradient_descent::GradientDescent;
 
 pub mod activator;

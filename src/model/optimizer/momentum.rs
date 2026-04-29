@@ -1,35 +1,33 @@
-use crate::model::activator::Activation;
-use crate::model::{ModelError, optimizer::Optimizer};
 use ndarray::{Array1, Array2, azip};
 
+use super::Optimizer;
+use crate::model::activator::Activation;
+use crate::model::error::ModelError;
+
 #[derive(Debug, Clone)]
-pub struct GradientDescent {
+pub struct Momentum {
     pub weights: Array1<f64>,
     pub bias: f64,
     pub learning_rate: f64,
     pub max_epochs: usize,
     pub tolerance: f64,
-    pub l1_ratio: f64,
-    pub l2_ratio: f64,
-    pub alpha: f64,
+    pub momentum: f64,
     pub activation: Activation,
     pub fitted: bool,
 
     y_pred_buffer: Array1<f64>,
     error_buffer: Array1<f64>,
     dw_buffer: Array1<f64>,
-
-    pub y_predicted: Array1<f64>,
+    velocity: Array1<f64>,
+    v_bias: f64,
 }
 
-impl GradientDescent {
+impl Momentum {
     pub fn new(
         learning_rate: f64,
         max_epochs: usize,
         tolerance: f64,
-        l1_ratio: f64,
-        l2_ratio: f64,
-        alpha: f64,
+        momentum: f64,
         activation: Activation,
     ) -> Self {
         Self {
@@ -38,23 +36,21 @@ impl GradientDescent {
             learning_rate,
             max_epochs,
             tolerance,
-            l1_ratio: l1_ratio.clamp(0.0, 1.0),
-            l2_ratio,
-            alpha,
+            momentum: momentum.clamp(0.0, 1.0),
             activation,
             fitted: false,
             y_pred_buffer: Array1::zeros(0),
             error_buffer: Array1::zeros(0),
             dw_buffer: Array1::zeros(0),
-            y_predicted: Array1::zeros(0),
+            velocity: Array1::zeros(0),
+            v_bias: 0.0,
         }
     }
 }
 
-impl Optimizer for GradientDescent {
+impl Optimizer for Momentum {
     fn fit(&mut self, x_train: &Array2<f64>, y_train: &Array1<f64>) -> Result<(), ModelError> {
         let (n_samples, n_features) = x_train.dim();
-
         if n_samples != y_train.len() {
             let error = ModelError::ShapeMismatch(n_samples, y_train.len());
             error.print_error();
@@ -62,15 +58,12 @@ impl Optimizer for GradientDescent {
         }
 
         self.weights = Array1::zeros(n_features);
+        self.velocity = Array1::zeros(n_features);
         self.y_pred_buffer = Array1::zeros(n_samples);
         self.error_buffer = Array1::zeros(n_samples);
         self.dw_buffer = Array1::zeros(n_features);
-        self.y_predicted = Array1::zeros(n_samples);
 
         let n_samples_f = n_samples as f64;
-        let l1_penalty = self.l1_ratio * self.alpha;
-        let l2_penalty = self.l2_ratio * self.alpha;
-        let l1_threshold = self.learning_rate * l1_penalty;
 
         for epoch in 0..self.max_epochs {
             ndarray::linalg::general_mat_vec_mul(
@@ -101,27 +94,19 @@ impl Optimizer for GradientDescent {
 
             let db = self.error_buffer.sum() / n_samples_f;
 
-            azip!((w in &mut self.weights, &dw in &self.dw_buffer) {
-                *w -= self.learning_rate * (dw + l2_penalty * *w);
+            azip!((v in &mut self.velocity, &dw in &self.dw_buffer) {
+                *v = self.momentum * *v + (1.0 - self.momentum) * dw;
             });
+            self.v_bias = self.momentum * self.v_bias + (1.0 - self.momentum) * db;
 
-            self.bias -= self.learning_rate * db;
-
-            if l1_threshold > 0.0 {
-                self.weights.mapv_inplace(|w| {
-                    if w > l1_threshold {
-                        w - l1_threshold
-                    } else if w < -l1_threshold {
-                        w + l1_threshold
-                    } else {
-                        0.0
-                    }
-                });
-            }
+            azip!((w in &mut self.weights, &v in &self.velocity) {
+                *w -= self.learning_rate * v;
+            });
+            self.bias -= self.learning_rate * self.v_bias;
 
             if epoch == self.max_epochs - 1 {
                 ModelError::print_warning(format!(
-                    "Model did not converge after {} iterations.",
+                    "Momentum did not converge after {} iterations.",
                     self.max_epochs
                 ));
             }
@@ -138,20 +123,9 @@ impl Optimizer for GradientDescent {
             return Err(error);
         }
 
-        let (_, n_features) = x_test.dim();
-        if n_features != self.weights.len() {
-            let error = ModelError::ShapeMismatch(n_features, self.weights.len());
-            error.print_error();
-            return Err(error);
-        }
-
         let mut y_predicted = Array1::zeros(x_test.nrows());
-
         ndarray::linalg::general_mat_vec_mul(1.0, x_test, &self.weights, 0.0, &mut y_predicted);
-
         self.activation.apply_inplace(&mut y_predicted);
-        self.y_predicted = y_predicted.clone();
-
         Ok(y_predicted)
     }
 
