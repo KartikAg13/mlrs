@@ -55,7 +55,7 @@ mod tests {
     use ndarray::{Array1, Array2, array};
     fn make_linear_data() -> (Array2<f64>, Array1<f64>) {
         let x = Array2::from_shape_vec((5, 1), vec![1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
-        let y = array![10.0, 13.0, 16.0, 19.0, 22.0]; // 3x + 7
+        let y = array![10.0, 13.0, 16.0, 19.0, 22.0];
         (x, y)
     }
 
@@ -96,7 +96,6 @@ mod tests {
     fn test_linear_regression_shape_mismatch() {
         let (x, _) = make_linear_data();
         let mut model = LinearRegressor::new();
-        // y has wrong length
         let y_bad = array![1.0, 2.0];
         assert!(matches!(
             model.fit(&x, &y_bad),
@@ -109,7 +108,6 @@ mod tests {
         let (x, y) = make_linear_data();
         let mut model = LinearRegressor::new().with_max_epochs(100);
         model.fit(&x, &y).unwrap();
-        // x_test has wrong number of features
         let x_bad = Array2::zeros((3, 5));
         assert!(matches!(
             model.predict(&x_bad),
@@ -130,9 +128,8 @@ mod tests {
         let r2 = model.evaluate(&None, &y);
         assert!(r2 > 0.95, "Ridge R2 was too low: {}", r2);
 
-        // Ridge should have smaller weights than pure linear (due to L2 penalty)
         let weights = model.weights();
-        assert!(weights.iter().all(|&w| w.abs() < 4.0)); // pure linear would be ~3.0
+        assert!(weights.iter().all(|&w| w.abs() < 4.0));
     }
 
     #[test]
@@ -148,9 +145,8 @@ mod tests {
         let r2 = model.evaluate(&None, &y);
         assert!(r2 > 0.9);
 
-        // Lasso tends to drive some coefficients closer to zero
         let weights = model.weights();
-        assert!(weights[0].abs() < 3.5); // should be shrunk
+        assert!(weights[0].abs() < 3.5);
     }
 
     #[test]
@@ -177,8 +173,7 @@ mod tests {
             .with_l2_ratio(1.0)
             .with_max_epochs(1000);
 
-        // Should still run without panic
         let result = model.fit(&x, &y);
-        assert!(result.is_ok() || result.is_err()); // We just want it to not crash
+        assert!(result.is_ok() || result.is_err());
     }
 }
