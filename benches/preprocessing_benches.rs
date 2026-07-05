@@ -8,12 +8,13 @@
 //!   cargo bench --bench preprocessing_benches full_pipeline
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use mlrs::dataset::preprocesser::encoder::{LabelEncoder, OneHotEncoder};
-use mlrs::dataset::preprocesser::handler::{ImputerStrategy, SimpleImputer};
-use mlrs::dataset::preprocesser::scaler::{MinMaxScaler, StandardScaler};
-use mlrs::dataset::{CSVConfig, read_csv};
 use polars::prelude::*;
 use std::hint::black_box;
+
+use mlrs::dataset::preprocessor::encoder::{LabelEncoder, OneHotEncoder};
+use mlrs::dataset::preprocessor::handler::{ImputerStrategy, SimpleImputer};
+use mlrs::dataset::preprocessor::scaler::{MinMaxScaler, StandardScaler};
+// use mlrs::dataset::{CSVReader, read_csv};
 
 // -----------------------------------------------------------------------------
 // Small in-memory test DataFrame (fast, no disk I/O)
@@ -39,35 +40,16 @@ fn make_small_test_df() -> DataFrame {
     .unwrap()
 }
 
-const LARGE_CSV: &str = "tests/fixtures/sample.csv";
+// const LARGE_CSV: &str = "tests/fixtures/sample.csv";
 const NUMERIC_COLS: [&str; 2] = ["loan_amnt", "annual_inc"];
 const CATEGORICAL_COLS: [&str; 2] = ["grade", "home_ownership"];
-
-// -----------------------------------------------------------------------------
-// CSV Loading
-// -----------------------------------------------------------------------------
-
-fn bench_csv_loading(c: &mut Criterion) {
-    let mut group = c.benchmark_group("csv_loading");
-
-    group.bench_function("read_csv_rows", |b| {
-        b.iter(|| {
-            let cfg = CSVConfig::new(black_box(LARGE_CSV))
-                .with_ignore_errors(true)
-                .with_n_threads(num_cpus::get());
-            black_box(read_csv(cfg));
-        })
-    });
-
-    group.finish();
-}
 
 // -----------------------------------------------------------------------------
 // Scaling
 // -----------------------------------------------------------------------------
 
 fn bench_scaling(c: &mut Criterion) {
-    let df = make_small_test_df(); // Use small DF to avoid crashes
+    let df = make_bench_dataframe();
 
     let mut group = c.benchmark_group("scaling");
 
@@ -76,7 +58,8 @@ fn bench_scaling(c: &mut Criterion) {
             || df.clone(),
             |mut df_clone| {
                 let mut scaler = MinMaxScaler::new((0.0, 1.0));
-                black_box(scaler.fit_transform(&mut df_clone, &NUMERIC_COLS).unwrap());
+                scaler.fit_transform(&mut df_clone, &NUMERIC_COLS).unwrap();
+                black_box(());
             },
             criterion::BatchSize::SmallInput,
         )
@@ -87,7 +70,8 @@ fn bench_scaling(c: &mut Criterion) {
             || df.clone(),
             |mut df_clone| {
                 let mut scaler = StandardScaler::new();
-                black_box(scaler.fit_transform(&mut df_clone, &NUMERIC_COLS).unwrap());
+                scaler.fit_transform(&mut df_clone, &NUMERIC_COLS).unwrap();
+                black_box(());
             },
             criterion::BatchSize::SmallInput,
         )
@@ -101,7 +85,7 @@ fn bench_scaling(c: &mut Criterion) {
 // -----------------------------------------------------------------------------
 
 fn bench_encoding(c: &mut Criterion) {
-    let df = make_small_test_df();
+    let df = make_bench_dataframe();
 
     let mut group = c.benchmark_group("encoding");
 
@@ -110,11 +94,10 @@ fn bench_encoding(c: &mut Criterion) {
             || df.clone(),
             |mut df_clone| {
                 let mut encoder = LabelEncoder::new();
-                black_box(
-                    encoder
-                        .fit_transform(&mut df_clone, &CATEGORICAL_COLS)
-                        .unwrap(),
-                );
+                encoder
+                    .fit_transform(&mut df_clone, &CATEGORICAL_COLS)
+                    .unwrap();
+                black_box(());
             },
             criterion::BatchSize::SmallInput,
         )
@@ -125,11 +108,10 @@ fn bench_encoding(c: &mut Criterion) {
             || df.clone(),
             |mut df_clone| {
                 let mut encoder = OneHotEncoder::new();
-                black_box(
-                    encoder
-                        .fit_transform(&mut df_clone, &["home_ownership"])
-                        .unwrap(),
-                );
+                encoder
+                    .fit_transform(&mut df_clone, &["home_ownership"])
+                    .unwrap();
+                black_box(());
             },
             criterion::BatchSize::SmallInput,
         )
@@ -154,7 +136,7 @@ fn bench_imputation(c: &mut Criterion) {
                 .unwrap()
                 .f64()
                 .unwrap()
-                .into_iter()
+                .iter()
                 .map(|v| if v.unwrap_or(0.0) > 40000.0 { None } else { v })
                 .collect::<Float64Chunked>()
                 .into_series()
@@ -168,13 +150,9 @@ fn bench_imputation(c: &mut Criterion) {
         b.iter_batched(
             || df_with_nulls.clone(),
             |mut df_clone| {
-                black_box(
-                    SimpleImputer::fill_null(
-                        &mut df_clone,
-                        &[("annual_inc", ImputerStrategy::Mean)],
-                    )
-                    .unwrap(),
-                );
+                SimpleImputer::fill_null(&mut df_clone, &[("annual_inc", ImputerStrategy::Mean)])
+                    .unwrap();
+                black_box(());
             },
             criterion::BatchSize::SmallInput,
         )
@@ -195,18 +173,18 @@ fn bench_full_pipeline(c: &mut Criterion) {
             || df.clone(),
             |mut df_clone| {
                 // Impute
-                let _ = SimpleImputer::fill_null(
-                    &mut df_clone,
-                    &[("annual_inc", ImputerStrategy::Mean)],
-                );
+                SimpleImputer::fill_null(&mut df_clone, &[("annual_inc", ImputerStrategy::Mean)])
+                    .unwrap();
 
                 // Encode
                 let mut label_encoder = LabelEncoder::new();
-                let _ = label_encoder.fit_transform(&mut df_clone, &CATEGORICAL_COLS);
+                label_encoder
+                    .fit_transform(&mut df_clone, &CATEGORICAL_COLS)
+                    .unwrap();
 
                 // Scale
                 let mut scaler = StandardScaler::new();
-                let _ = scaler.fit_transform(&mut df_clone, &NUMERIC_COLS);
+                scaler.fit_transform(&mut df_clone, &NUMERIC_COLS).unwrap();
 
                 black_box(df_clone);
             },
@@ -216,13 +194,55 @@ fn bench_full_pipeline(c: &mut Criterion) {
 }
 
 // -----------------------------------------------------------------------------
+// Dropper
+// -----------------------------------------------------------------------------
+
+fn bench_dropper(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dropper");
+
+    let df_with_nulls = {
+        let n = 50_000;
+        let data: Vec<Option<f64>> = (0..n)
+            .map(|i| if i % 10 == 0 { None } else { Some(i as f64) })
+            .collect();
+        df!["value" => data, "name" => vec!["test"; n]].unwrap()
+    };
+
+    group.bench_function("drop_rows_any", |b| {
+        b.iter_batched(
+            || df_with_nulls.clone(),
+            |mut df_clone| {
+                use mlrs::dataset::preprocessor::handler::Dropper;
+                Dropper::drop_rows_any(&mut df_clone, &["value"]).unwrap();
+                black_box(());
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    group.bench_function("drop_columns", |b| {
+        b.iter_batched(
+            || df_with_nulls.clone(),
+            |mut df_clone| {
+                use mlrs::dataset::preprocessor::handler::Dropper;
+                Dropper::drop_columns(&mut df_clone, &["name"]).unwrap();
+                black_box(());
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    group.finish();
+}
+
+// -----------------------------------------------------------------------------
 // Groups — run one at a time
 // -----------------------------------------------------------------------------
 
-criterion_group!(csv_loading, bench_csv_loading);
 criterion_group!(scaling, bench_scaling);
 criterion_group!(encoding, bench_encoding);
 criterion_group!(imputation, bench_imputation);
 criterion_group!(full_pipeline, bench_full_pipeline);
+criterion_group!(dropper, bench_dropper);
 
-criterion_main!(csv_loading, scaling, encoding, imputation, full_pipeline);
+criterion_main!(scaling, encoding, imputation, full_pipeline, dropper);

@@ -6,11 +6,11 @@
 //! - SimpleImputer
 //! - Dropper (new)
 
-use mlrs::dataset::preprocesser::encoder::{LabelEncoder, OneHotEncoder};
-use mlrs::dataset::preprocesser::handler::{
+use mlrs::dataset::preprocessor::encoder::{LabelEncoder, OneHotEncoder};
+use mlrs::dataset::preprocessor::handler::{
     Dropper, DropperStrategy, ImputerStrategy, SimpleImputer,
 };
-use mlrs::dataset::preprocesser::scaler::{MinMaxScaler, StandardScaler};
+use mlrs::dataset::preprocessor::scaler::{MinMaxScaler, StandardScaler};
 use polars::prelude::*;
 
 /// Creates a small, reproducible test DataFrame with numeric and categorical columns.
@@ -204,7 +204,7 @@ fn test_label_encoder_unseen_labels_map_to_max() {
 
     let mut encoder = LabelEncoder::new();
     encoder.fit(&train, &["category"]).unwrap();
-    encoder.transform(&mut test, &["category"]).unwrap();
+    encoder.transform(&mut test).unwrap();
 
     let encoded = test.column("category").unwrap().u32().unwrap();
     assert_eq!(encoded.get(2), Some(u32::MAX));
@@ -338,4 +338,55 @@ fn test_full_preprocessing_pipeline() {
     let scaled = df.column("loan_amnt").unwrap().f64().unwrap();
     assert!(scaled.min().unwrap() >= -1e-9);
     assert!(scaled.max().unwrap() <= 1.0 + 1e-9);
+}
+
+// -----------------------------------------------------------------------------
+// CSV Loading Integration Tests
+// -----------------------------------------------------------------------------
+#[test]
+fn test_read_csv_loads_sample_file() {
+    use mlrs::dataset::read_csv;
+    let df = read_csv("tests/fixtures/sample.csv");
+    assert!(df.height() > 0);
+    assert!(df.width() > 0);
+}
+
+// -----------------------------------------------------------------------------
+// Error Handling Tests
+// -----------------------------------------------------------------------------
+#[test]
+fn test_encoder_transform_before_fit_returns_error() {
+    use mlrs::dataset::preprocessor::error::PreprocessingError;
+    let mut df = make_test_dataframe();
+    let encoder = LabelEncoder::new();
+    let result = encoder.transform(&mut df);
+    assert!(matches!(result, Err(PreprocessingError::NotFitted)));
+}
+
+#[test]
+fn test_scaler_transform_before_fit_returns_error() {
+    use mlrs::dataset::preprocessor::error::PreprocessingError;
+    let mut df = make_test_dataframe();
+    let scaler = StandardScaler::new();
+    let result = scaler.transform(&mut df);
+    assert!(matches!(result, Err(PreprocessingError::NotFitted)));
+}
+
+#[test]
+fn test_encoder_fit_non_string_column_returns_error() {
+    use mlrs::dataset::preprocessor::error::PreprocessingError;
+    let df = make_test_dataframe();
+    let mut encoder = LabelEncoder::new();
+    let result = encoder.fit(&df, &["loan_amnt"]);
+    assert!(matches!(
+        result,
+        Err(PreprocessingError::InvalidColumnType(_, _, _))
+    ));
+}
+
+#[test]
+fn test_dropper_convenience_methods() {
+    let mut df = make_df_with_nulls();
+    Dropper::drop_rows_any(&mut df, &["a", "b"]).unwrap();
+    assert_eq!(df.height(), 1);
 }

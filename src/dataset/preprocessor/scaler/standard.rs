@@ -5,10 +5,9 @@
 //! (linear models, neural networks, PCA, etc.).
 
 use polars::prelude::*;
-use std::collections::HashMap;
 
-use crate::dataset::preprocesser::error::PreprocessingError;
-use crate::dataset::preprocesser::scaler::{Scaler, Scaling};
+use crate::dataset::preprocessor::error::PreprocessingError;
+use crate::dataset::preprocessor::scaler::{Scaler, Scaling};
 
 /// Marker config for standard scaling (mean = 0, std = 1).
 #[derive(Debug, Clone, Copy, Default)]
@@ -64,11 +63,7 @@ pub type StandardScaler = Scaler<StandardConfig>;
 impl StandardScaler {
     /// Creates a new [`StandardScaler`].
     pub fn new() -> Self {
-        Self {
-            stats: HashMap::new(),
-            fitted: false,
-            config: StandardConfig,
-        }
+        Self::with_config(StandardConfig)
     }
 }
 
@@ -87,11 +82,20 @@ impl Scaling for StandardConfig {
                     "Column '{}' is not Float type.",
                     column.name()
                 ));
-                return (0.0, 0.0);
+                return (0.0, 1.0);
             }
         };
         let mean = column_chunked.mean().unwrap_or(0.0);
         let std = column_chunked.std(1).unwrap_or(1.0);
+        let std = if std.abs() < f64::EPSILON {
+            PreprocessingError::print_warning(format!(
+                "Column '{}' has zero variance (std=0). Using std=1.0 to avoid division by zero.",
+                column.name()
+            ));
+            1.0
+        } else {
+            std
+        };
         (mean, std)
     }
 
@@ -103,7 +107,7 @@ impl Scaling for StandardConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataset::preprocesser::scaler::PreprocessingError;
+    use crate::dataset::preprocessor::scaler::PreprocessingError;
 
     fn make_df() -> DataFrame {
         df![
@@ -121,9 +125,9 @@ mod tests {
         let df = make_df();
         let mut scaler = StandardScaler::new();
         assert!(scaler.fit(&df, &["age", "salary"]).is_ok());
-        assert!(scaler.fitted);
-        assert!(scaler.stats.contains_key("age"));
-        assert!(scaler.stats.contains_key("salary"));
+        assert!(scaler.is_fitted());
+        assert!(scaler.get_stats().contains_key("age"));
+        assert!(scaler.get_stats().contains_key("salary"));
     }
 
     #[test]
@@ -136,8 +140,8 @@ mod tests {
             result.is_ok(),
             "fit should succeed with warning when column not found"
         );
-        assert!(scaler.fitted);
-        assert!(!scaler.stats.contains_key("nonexistent"));
+        assert!(scaler.is_fitted());
+        assert!(!scaler.get_stats().contains_key("nonexistent"));
     }
 
     #[test]
@@ -150,8 +154,8 @@ mod tests {
             result.is_ok(),
             "fit should succeed with warning for non-numeric column"
         );
-        assert!(scaler.fitted);
-        assert!(scaler.stats.is_empty());
+        assert!(scaler.is_fitted());
+        assert!(scaler.get_stats().is_empty());
     }
 
     #[test]
@@ -195,7 +199,7 @@ mod tests {
         let mut df = make_df();
         let mut scaler = StandardScaler::new();
         assert!(scaler.fit_transform(&mut df, &["age", "salary"]).is_ok());
-        assert!(scaler.fitted);
+        assert!(scaler.is_fitted());
 
         for col_name in ["age", "salary"] {
             let col = df
@@ -206,6 +210,28 @@ mod tests {
             let ca = col.f64().unwrap();
             assert!((ca.mean().unwrap()).abs() < EPSILON);
             assert!((ca.std(1).unwrap() - 1.0).abs() < EPSILON);
+        }
+    }
+
+    #[test]
+    fn test_standard_zero_variance_does_not_produce_nan() {
+        let mut df = df!["constant" => [5.0_f64, 5.0, 5.0, 5.0]].unwrap();
+        let mut scaler = StandardScaler::new();
+        scaler.fit_transform(&mut df, &["constant"]).unwrap();
+        let col = df.column("constant").unwrap().f64().unwrap();
+        for i in 0..4 {
+            let val = col.get(i).unwrap();
+            assert!(
+                !val.is_nan(),
+                "Expected no NaN values, got NaN at index {}",
+                i
+            );
+            assert!(
+                val.is_finite(),
+                "Expected finite values, got {} at index {}",
+                val,
+                i
+            );
         }
     }
 }

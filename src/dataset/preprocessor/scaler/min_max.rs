@@ -4,11 +4,11 @@
 //! useful for algorithms that are sensitive to the scale of input features
 //! (e.g. neural networks, k-NN, SVM with RBF kernel).
 
+use colored::Colorize;
 use polars::prelude::*;
-use std::collections::HashMap;
 
-use crate::dataset::preprocesser::error::PreprocessingError;
-use crate::dataset::preprocesser::scaler::{Scaler, Scaling};
+use crate::dataset::preprocessor::error::PreprocessingError;
+use crate::dataset::preprocessor::scaler::{Scaler, Scaling};
 
 /// Configuration for min-max scaling.
 #[derive(Debug, Clone)]
@@ -77,11 +77,7 @@ pub type MinMaxScaler = Scaler<MinMaxConfig>;
 impl MinMaxScaler {
     /// Creates a new [`MinMaxScaler`] with the desired output range.
     pub fn new(feature_range: (f64, f64)) -> Self {
-        Self {
-            stats: HashMap::new(),
-            fitted: false,
-            config: MinMaxConfig { feature_range },
-        }
+        Self::with_config(MinMaxConfig { feature_range })
     }
 }
 
@@ -90,10 +86,9 @@ impl Scaling for MinMaxConfig {
         let column_chunked = match column.f64() {
             Ok(c) => c,
             Err(_) => {
-                PreprocessingError::print_warning(format!(
-                    "Column '{}' is not Float type.",
-                    column.name()
-                ));
+                let msg =
+                    format!("Column '{}' is not Float type. Skipping.", column.name()).yellow();
+                eprintln!("{}{}", "WARNING from MinMaxScaler: ".yellow().bold(), msg);
                 return (0.0, 0.0);
             }
         };
@@ -112,19 +107,20 @@ impl Scaling for MinMaxConfig {
     }
 
     fn scale_value(&self, column: Column, stats: (f64, f64)) -> Column {
-        if (stats.1 - stats.0).abs() < f64::EPSILON {
+        let (min, max) = stats;
+        let (low, high) = self.feature_range;
+        if (max - min).abs() < f64::EPSILON {
             return column * 0.0;
         }
-
-        (column - stats.0) / (stats.1 - stats.0) * (self.feature_range.1 - self.feature_range.0)
-            + self.feature_range.0
+        let scale = (high - low) / (max - min);
+        (column - min) * scale + low
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataset::preprocesser::scaler::PreprocessingError;
+    use crate::dataset::preprocessor::scaler::PreprocessingError;
 
     fn make_df() -> DataFrame {
         df![
@@ -142,9 +138,9 @@ mod tests {
         let df = make_df();
         let mut scaler = MinMaxScaler::new((0.0, 1.0));
         assert!(scaler.fit(&df, &["age", "salary"]).is_ok());
-        assert!(scaler.fitted);
-        assert!(scaler.stats.contains_key("age"));
-        assert!(scaler.stats.contains_key("salary"));
+        assert!(scaler.is_fitted());
+        assert!(scaler.get_stats().contains_key("age"));
+        assert!(scaler.get_stats().contains_key("salary"));
     }
 
     #[test]
@@ -157,8 +153,8 @@ mod tests {
             result.is_ok(),
             "fit should succeed even if column is missing"
         );
-        assert!(scaler.fitted);
-        assert!(!scaler.stats.contains_key("nonexistent"));
+        assert!(scaler.is_fitted());
+        assert!(!scaler.get_stats().contains_key("nonexistent"));
     }
 
     #[test]
@@ -171,8 +167,8 @@ mod tests {
             result.is_ok(),
             "fit should succeed with warning for non-numeric column"
         );
-        assert!(scaler.fitted);
-        assert!(scaler.stats.is_empty());
+        assert!(scaler.is_fitted());
+        assert!(scaler.get_stats().is_empty());
     }
 
     #[test]
@@ -240,7 +236,7 @@ mod tests {
         let mut df = make_df();
         let mut scaler = MinMaxScaler::new((0.0, 1.0));
         assert!(scaler.fit_transform(&mut df, &["age", "salary"]).is_ok());
-        assert!(scaler.fitted);
+        assert!(scaler.is_fitted());
 
         for col_name in ["age", "salary"] {
             let col = df
@@ -252,5 +248,16 @@ mod tests {
             assert!((ca.min().unwrap() - 0.0).abs() < EPSILON);
             assert!((ca.max().unwrap() - 1.0).abs() < EPSILON);
         }
+    }
+
+    #[test]
+    fn test_minmax_constant_column_scaled_to_zero() {
+        let mut df = df!["constant" => [7.0_f64, 7.0, 7.0]].unwrap();
+        let mut scaler = MinMaxScaler::new((0.0, 1.0));
+        scaler.fit_transform(&mut df, &["constant"]).unwrap();
+        let col = df.column("constant").unwrap().f64().unwrap();
+        assert!((col.get(0).unwrap() - 0.0).abs() < EPSILON);
+        assert!((col.get(1).unwrap() - 0.0).abs() < EPSILON);
+        assert!((col.get(2).unwrap() - 0.0).abs() < EPSILON);
     }
 }

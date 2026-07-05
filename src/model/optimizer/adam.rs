@@ -1,152 +1,161 @@
-use ndarray::{Array1, Array2, azip};
+use ndarray::{Array1, Array2, Zip};
+use std::collections::HashMap;
 
-use crate::model::OptimizingStrategy;
-use crate::model::optimizer::BaseOptimizer;
-use crate::model::{ModelError, activator::ActivationStrategy};
+use super::OptimizingStrategy;
+use crate::model::error::ModelError;
+use crate::{
+    constants::{DEFAULT_BETA, DEFAULT_BETA2, DEFAULT_LEARNING_RATE, DEFAULT_TOLERANCE},
+    model::layer::Layer,
+};
 
-#[derive(Debug, Clone)]
+type AdamMoments = (Array2<f64>, Array1<f64>, Array2<f64>, Array1<f64>);
+
 pub struct Adam {
-    pub base: BaseOptimizer,
-
+    pub learning_rate: f64,
     pub beta1: f64,
     pub beta2: f64,
     pub epsilon: f64,
 
-    m: Array1<f64>,
-    v: Array1<f64>,
-    m_bias: f64,
-    v_bias: f64,
     t: usize,
+    moments: Vec<AdamMoments>,
 }
 
 impl Adam {
-    pub fn new(
-        learning_rate: f64,
-        max_epochs: usize,
-        tolerance: f64,
-        beta1: f64,
-        beta2: f64,
-        epsilon: f64,
-        activation: ActivationStrategy,
-    ) -> Self {
+    pub fn new() -> Self {
         Self {
-            base: BaseOptimizer::new(learning_rate, max_epochs, tolerance, activation),
-            beta1: beta1.clamp(0.0, 1.0),
-            beta2: beta2.clamp(0.0, 1.0),
-            epsilon: epsilon.max(1e-8),
-
-            m: Array1::zeros(0),
-            v: Array1::zeros(0),
-            m_bias: 0.0,
-            v_bias: 0.0,
+            learning_rate: DEFAULT_LEARNING_RATE,
+            beta1: DEFAULT_BETA,
+            beta2: DEFAULT_BETA2,
+            epsilon: DEFAULT_TOLERANCE,
             t: 0,
+            moments: Vec::new(),
         }
+    }
+
+    pub fn with_learning_rate(mut self, learning_rate: f64) -> Self {
+        if self.learning_rate != learning_rate {
+            ModelError::print_modifying(format!(
+                "Learning rate from {} to {}",
+                self.learning_rate, learning_rate
+            ));
+            self.learning_rate = learning_rate;
+        }
+        self
+    }
+
+    pub fn with_beta1(mut self, beta1: f64) -> Self {
+        if self.beta1 != beta1 {
+            ModelError::print_modifying(format!("Beta1 from {} to {}", self.beta1, beta1));
+            self.beta1 = beta1;
+        }
+        self
+    }
+
+    pub fn with_beta2(mut self, beta2: f64) -> Self {
+        if self.beta2 != beta2 {
+            ModelError::print_modifying(format!("Beta2 from {} to {}", self.beta2, beta2));
+            self.beta2 = beta2;
+        }
+        self
+    }
+
+    pub fn with_epsilon(mut self, epsilon: f64) -> Self {
+        if self.epsilon != epsilon {
+            ModelError::print_modifying(format!("Epsilon from {} to {}", self.epsilon, epsilon));
+            self.epsilon = epsilon;
+        }
+        self
+    }
+}
+
+impl Default for Adam {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl OptimizingStrategy for Adam {
-    fn base(&self) -> &BaseOptimizer {
-        &self.base
-    }
-
-    fn base_mut(&mut self) -> &mut BaseOptimizer {
-        &mut self.base
-    }
-
-    fn fit(&mut self, x_train: &Array2<f64>, y_train: &Array1<f64>) -> Result<(), ModelError> {
-        let (n_samples, n_features) = x_train.dim();
-        if n_samples != y_train.len() {
-            let error = ModelError::ShapeMismatch(n_samples, y_train.len());
-            error.print_error();
-            return Err(error);
-        }
-
-        self.base.weights = Array1::zeros(n_features);
-        self.m = Array1::zeros(n_features);
-        self.v = Array1::zeros(n_features);
-        self.base.y_pred_buffer = Array1::zeros(n_samples);
-        self.base.error_buffer = Array1::zeros(n_samples);
-        self.base.dw_buffer = Array1::zeros(n_features);
+    fn reset(&mut self) {
         self.t = 0;
-
-        let n_samples_f = n_samples as f64;
-
-        for epoch in 0..self.base.max_epochs {
-            self.t += 1;
-
-            ndarray::linalg::general_mat_vec_mul(
-                1.0,
-                x_train,
-                &self.base.weights,
-                0.0,
-                &mut self.base.y_pred_buffer,
-            );
-            self.base
-                .activation
-                .apply_inplace(&mut self.base.y_pred_buffer);
-
-            azip!((error in &mut self.base.error_buffer, &pred in &self.base.y_pred_buffer, &actual in y_train) {
-                *error = pred - actual;
-            });
-
-            let mae = self.base.error_buffer.mapv(f64::abs).mean().unwrap_or(0.0);
-            if mae < self.base.tolerance {
-                break;
-            }
-
-            ndarray::linalg::general_mat_vec_mul(
-                1.0 / n_samples_f,
-                &x_train.t(),
-                &self.base.error_buffer,
-                0.0,
-                &mut self.base.dw_buffer,
-            );
-
-            let db = self.base.error_buffer.sum() / n_samples_f;
-
-            azip!((m in &mut self.m, v in &mut self.v, &dw in &self.base.dw_buffer) {
-                *m = self.beta1 * *m + (1.0 - self.beta1) * dw;
-                *v = self.beta2 * *v + (1.0 - self.beta2) * dw * dw;
-            });
-            self.m_bias = self.beta1 * self.m_bias + (1.0 - self.beta1) * db;
-            self.v_bias = self.beta2 * self.v_bias + (1.0 - self.beta2) * db * db;
-
-            let m_hat = self.m.mapv(|m| m / (1.0 - self.beta1.powi(self.t as i32)));
-            let v_hat = self.v.mapv(|v| v / (1.0 - self.beta2.powi(self.t as i32)));
-            let m_bias_hat = self.m_bias / (1.0 - self.beta1.powi(self.t as i32));
-            let v_bias_hat = self.v_bias / (1.0 - self.beta2.powi(self.t as i32));
-
-            azip!((w in &mut self.base.weights, &mh in &m_hat, &vh in &v_hat) {
-                *w -= self.base.learning_rate * mh / (vh.sqrt() + self.epsilon);
-            });
-            self.base.bias -=
-                self.base.learning_rate * m_bias_hat / (v_bias_hat.sqrt() + self.epsilon);
-
-            if epoch == self.base.max_epochs - 1 {
-                ModelError::print_warning(format!(
-                    "Adam did not converge after {} iterations.",
-                    self.base.max_epochs
-                ));
-            }
-        }
-
-        self.base.fitted = true;
-        Ok(())
+        self.moments.clear();
     }
 
-    fn predict(&mut self, x_test: &Array2<f64>) -> Result<Array1<f64>, ModelError> {
-        if !self.base.fitted {
-            let error = ModelError::NotFitted;
-            error.print_error();
-            return Err(error);
-        }
-        let mut y_pred = Array1::zeros(x_test.nrows());
-        ndarray::linalg::general_mat_vec_mul(1.0, x_test, &self.base.weights, 0.0, &mut y_pred);
-        self.base.activation.apply_inplace(&mut y_pred);
-        Ok(y_pred)
+    fn learning_rate(&self) -> f64 {
+        self.learning_rate
     }
 
-    fn is_fitted(&self) -> bool {
-        self.base.fitted
+    fn set_learning_rate(&mut self, learning_rate: f64) {
+        self.learning_rate = learning_rate;
+    }
+
+    fn hyperparameters(&self) -> HashMap<String, f64> {
+        let mut map = HashMap::new();
+        map.insert("learning_rate".to_string(), self.learning_rate);
+        map.insert("beta1".to_string(), self.beta1);
+        map.insert("beta2".to_string(), self.beta2);
+        map.insert("epsilon".to_string(), self.epsilon);
+        map
+    }
+
+    fn step(&mut self, layers: &mut Vec<Layer>, gradients: &[(Array2<f64>, Array1<f64>)]) {
+        if self.moments.is_empty() {
+            self.moments = layers
+                .iter()
+                .map(|layer| {
+                    (
+                        Array2::zeros(layer.weights.raw_dim()),
+                        Array1::zeros(layer.bias.len()),
+                        Array2::zeros(layer.weights.raw_dim()),
+                        Array1::zeros(layer.bias.len()),
+                    )
+                })
+                .collect();
+        }
+
+        self.t += 1;
+
+        let beta1 = self.beta1;
+        let beta2 = self.beta2;
+        let one_minus_beta1 = 1.0 - beta1;
+        let one_minus_beta2 = 1.0 - beta2;
+        let lr = self.learning_rate;
+        let epsilon = self.epsilon;
+
+        let bias_correction1 = 1.0 - beta1.powi(self.t as i32);
+        let bias_correction2 = 1.0 - beta2.powi(self.t as i32);
+
+        for ((layer, (dw, db)), (mw, mb, vw, vb)) in layers
+            .iter_mut()
+            .zip(gradients.iter())
+            .zip(self.moments.iter_mut())
+        {
+            Zip::from(layer.weights.view_mut())
+                .and(mw.view_mut())
+                .and(vw.view_mut())
+                .and(dw.view())
+                .for_each(|w, m, v, &g| {
+                    *m = beta1 * *m + one_minus_beta1 * g;
+                    *v = beta2 * *v + one_minus_beta2 * g * g;
+
+                    let m_hat = *m / bias_correction1;
+                    let v_hat = *v / bias_correction2;
+
+                    *w -= lr * m_hat / (v_hat.sqrt() + epsilon);
+                });
+
+            Zip::from(layer.bias.view_mut())
+                .and(mb.view_mut())
+                .and(vb.view_mut())
+                .and(db.view())
+                .for_each(|b, m, v, &g| {
+                    *m = beta1 * *m + one_minus_beta1 * g;
+                    *v = beta2 * *v + one_minus_beta2 * g * g;
+
+                    let m_hat = *m / bias_correction1;
+                    let v_hat = *v / bias_correction2;
+
+                    *b -= lr * m_hat / (v_hat.sqrt() + epsilon);
+                });
+        }
     }
 }

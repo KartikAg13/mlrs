@@ -19,3 +19,5 @@ EOF
 
 *.svg
 *.data*
+
+reports/

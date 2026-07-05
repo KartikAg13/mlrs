@@ -5,9 +5,10 @@
 //! It works directly on `polars::DataFrame` and integrates well with
 //! the rest of the preprocessing pipeline.
 
+use colored::Colorize;
 use polars::prelude::*;
 
-use crate::dataset::preprocesser::error::PreprocessingError;
+use crate::dataset::preprocessor::error::PreprocessingError;
 
 /// Imputation strategy for missing values.
 ///
@@ -103,6 +104,7 @@ impl SimpleImputer {
     ///
     /// * `dataframe` - Mutable reference to the DataFrame to modify in-place.
     /// * `columns` - Slice of `(column_name, strategy)` pairs.
+    #[must_use = "this returns a Result that should be handled"]
     pub fn fill_null(
         dataframe: &mut DataFrame,
         columns: &[(&str, ImputerStrategy)],
@@ -110,18 +112,30 @@ impl SimpleImputer {
         if columns.is_empty() {
             return Ok(());
         }
+
         for (name, strategy) in columns {
+            // Check if column exists
             let index = match dataframe.get_column_index(name) {
                 Some(i) => i,
                 None => {
-                    PreprocessingError::print_warning(format!("Column '{}' not found.", name));
+                    let msg = format!("Column '{}' not found. Skipping.", name);
+                    eprintln!(
+                        "{} {}",
+                        "WARNING from SimpleImputer: ".yellow().bold(),
+                        msg.yellow()
+                    );
                     continue;
                 }
             };
 
             let column = dataframe.column(name)?;
 
-            let strategy = match strategy {
+            // Skip if no nulls
+            if column.null_count() == 0 {
+                continue;
+            }
+
+            let fill_strategy = match strategy {
                 ImputerStrategy::Mean => FillNullStrategy::Mean,
                 ImputerStrategy::MinimumValue => FillNullStrategy::Min,
                 ImputerStrategy::MaximumValue => FillNullStrategy::Max,
@@ -131,24 +145,13 @@ impl SimpleImputer {
                 ImputerStrategy::BackwardFill => FillNullStrategy::Backward(None),
             };
 
-            let filled = match column.fill_null(strategy) {
-                Ok(c) => c,
-                Err(e) => {
-                    let error = PreprocessingError::PolarsError(e);
-                    error.print_error();
-                    return Err(error);
-                }
-            };
+            // Fill nulls
+            let filled = column.fill_null(fill_strategy)?;
 
-            match dataframe.replace_column(index, filled) {
-                Ok(d) => d,
-                Err(e) => {
-                    let error = PreprocessingError::PolarsError(e);
-                    error.print_error();
-                    return Err(error);
-                }
-            };
+            // Replace column in DataFrame
+            dataframe.replace_column(index, filled)?;
         }
+
         Ok(())
     }
 }

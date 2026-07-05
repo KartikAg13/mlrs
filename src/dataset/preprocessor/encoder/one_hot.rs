@@ -11,15 +11,16 @@
 use polars::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use crate::dataset::preprocesser::encoder::{Encoder, EncodingStrategy};
-use crate::dataset::preprocesser::error::PreprocessingError;
+use crate::dataset::preprocessor::encoder::{Encoder, EncodingStrategy};
+use crate::dataset::preprocessor::error::{PreprocessingError, PreprocessingErrorInner};
 
 /// Configuration for one-hot encoding.
 ///
 /// Stores the sorted list of categories seen for each column.
 #[derive(Debug, Default)]
 pub struct OneHotConfig {
-    pub categories: HashMap<String, Vec<String>>,
+    pub(crate) categories: HashMap<String, Vec<PlSmallStr>>,
+    pub(crate) drop_original: bool,
 }
 
 /// Convenient type alias for a fully configured one-hot encoder.
@@ -55,7 +56,7 @@ pub struct OneHotConfig {
 ///
 /// let mut encoder = OneHotEncoder::new();
 /// encoder.fit(&train, &["city"])?;
-/// encoder.transform(&mut test, &["city"])?;
+/// encoder.transform(&mut test)?;
 ///
 /// // Unseen categories produce all-zero rows for that column
 /// # Ok(())
@@ -82,12 +83,21 @@ pub type OneHotEncoder = Encoder<OneHotConfig>;
 impl OneHotEncoder {
     /// Creates a new unfitted [`OneHotEncoder`].
     pub fn new() -> Self {
-        Self {
-            fitted: false,
-            config: OneHotConfig {
-                categories: HashMap::new(),
-            },
-        }
+        Self::with_config(OneHotConfig {
+            categories: HashMap::new(),
+            drop_original: false,
+        })
+    }
+
+    /// Sets whether to drop the original categorical column after encoding.
+    pub fn with_drop_original(mut self, drop: bool) -> Self {
+        self.config.drop_original = drop;
+        self
+    }
+
+    /// Returns the learned categories per column.
+    pub fn get_categories(&self) -> &HashMap<String, Vec<PlSmallStr>> {
+        &self.config().categories
     }
 }
 
@@ -98,25 +108,25 @@ impl Default for OneHotEncoder {
 }
 
 impl EncodingStrategy for OneHotConfig {
-    fn compute_encoding(&mut self, column: &Column) -> Result<(), PreprocessingError> {
+    fn fit_column(&mut self, column: &Column) -> Result<(), PreprocessingError> {
         let name = column.name().to_string();
-        let column_chuncked = match column.str() {
+        let column_chunked = match column.str() {
             Ok(c) => c,
             Err(_) => {
-                let error = PreprocessingError::InvalidColumnType(
-                    name,
-                    "String".to_string(),
-                    column.dtype().to_string(),
-                );
-                error.print_error();
-                return Err(error);
+                return Err((PreprocessingErrorInner::InvalidColumnType {
+                    column: name,
+                    actual: "String".to_string(),
+                    expected: column.dtype().to_string(),
+                })
+                .into());
             }
         };
         let mut seen: HashSet<String> = HashSet::new();
-        let mut cats: Vec<String> = Vec::new();
-        for value in column_chuncked.into_iter().flatten() {
-            if seen.insert(value.to_string()) {
-                cats.push(value.to_string());
+        let mut cats: Vec<PlSmallStr> = Vec::new();
+        for value in column_chunked.iter().flatten() {
+            let s = value.to_string();
+            if seen.insert(s.clone()) {
+                cats.push(s.into());
             }
         }
         cats.sort();
@@ -124,7 +134,7 @@ impl EncodingStrategy for OneHotConfig {
         Ok(())
     }
 
-    fn apply_encoding(
+    fn transform_column(
         &self,
         dataframe: &mut DataFrame,
         name: &str,
@@ -132,34 +142,35 @@ impl EncodingStrategy for OneHotConfig {
         let cats = match self.categories.get(name) {
             Some(c) => c,
             _ => {
-                let error = PreprocessingError::ColumnNotFound(name.to_string());
-                error.print_error();
-                return Err(error);
+                return Err((PreprocessingErrorInner::ColumnNotFound(name.to_string())).into());
             }
         };
+
         let column = dataframe.column(name)?.clone();
-        let column_chuncked = match column.str() {
+        let column_chunked = match column.str() {
             Ok(c) => c,
             Err(_) => {
-                let error = PreprocessingError::InvalidColumnType(
-                    name.to_string(),
-                    "String".to_string(),
-                    column.dtype().to_string(),
-                );
-                error.print_error();
-                return Err(error);
+                return Err((PreprocessingErrorInner::InvalidColumnType {
+                    column: name.to_string(),
+                    actual: "String".to_string(),
+                    expected: column.dtype().to_string(),
+                })
+                .into());
             }
         };
         let new_columns: Vec<Column> = cats
             .iter()
             .map(|cat| {
                 let column_name = format!("{}_{}", name, cat);
-                let binary: BooleanChunked = column_chuncked
+                let binary: BooleanChunked = column_chunked
                     .apply_nonnull_values_generic(DataType::Boolean, |value| value == cat.as_str());
                 Column::from(binary.into_series().with_name(column_name.as_str().into()))
             })
             .collect();
         dataframe.hstack_mut(&new_columns)?;
+        if self.drop_original {
+            let _ = dataframe.drop_in_place(name);
+        }
         Ok(())
     }
 }
@@ -167,7 +178,7 @@ impl EncodingStrategy for OneHotConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataset::preprocesser::encoder::PreprocessingError;
+    use crate::dataset::preprocessor::error::PreprocessingErrorInner;
 
     fn make_df() -> DataFrame {
         df![
@@ -183,11 +194,11 @@ mod tests {
         let df = make_df();
         let mut encoder = OneHotEncoder::new();
         assert!(encoder.fit(&df, &["color"]).is_ok());
-        assert!(encoder.fitted);
-        assert!(encoder.config.categories.contains_key("color"));
+        assert!(encoder.is_fitted());
+        assert!(encoder.config().categories.contains_key("color"));
         // sorted: blue, green, red
         assert_eq!(
-            encoder.config.categories["color"],
+            encoder.config().categories["color"],
             vec!["blue", "green", "red"]
         );
     }
@@ -197,8 +208,10 @@ mod tests {
         let df = make_df();
         let mut encoder = OneHotEncoder::new();
         assert!(matches!(
-            encoder.fit(&df, &["nonexistent"]),
-            Err(PreprocessingError::ColumnNotFound(_))
+            encoder
+                .fit(&df, &["nonexistent"])
+                .map_err(|e| e.into_inner()),
+            Err(PreprocessingErrorInner::ColumnNotFound(_))
         ));
     }
 
@@ -207,8 +220,12 @@ mod tests {
         let df = make_df();
         let mut encoder = OneHotEncoder::new();
         assert!(matches!(
-            encoder.fit(&df, &["weight"]),
-            Err(PreprocessingError::InvalidColumnType(_, _, _))
+            encoder.fit(&df, &["weight"]).map_err(|e| e.into_inner()),
+            Err(PreprocessingErrorInner::InvalidColumnType {
+                column: _,
+                expected: _,
+                actual: _
+            })
         ));
     }
 
@@ -217,8 +234,8 @@ mod tests {
         let mut df = make_df();
         let encoder = OneHotEncoder::new();
         assert!(matches!(
-            encoder.transform(&mut df, &["color"]),
-            Err(PreprocessingError::NotFitted)
+            encoder.transform(&mut df).map_err(|e| e.into_inner()),
+            Err(PreprocessingErrorInner::NotFitted)
         ));
     }
 
@@ -228,7 +245,7 @@ mod tests {
         let original_width = df.width();
         let mut encoder = OneHotEncoder::new();
         encoder.fit(&df, &["color"]).unwrap();
-        encoder.transform(&mut df, &["color"]).unwrap();
+        encoder.transform(&mut df).unwrap();
 
         // 3 new columns: color_blue, color_green, color_red
         assert_eq!(df.width(), original_width + 3);

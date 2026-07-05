@@ -11,12 +11,12 @@ use polars::prelude::*;
 
 pub mod label;
 pub mod one_hot;
-use crate::dataset::preprocesser::error::PreprocessingError;
+use crate::dataset::preprocessor::error::{PreprocessingError, PreprocessingErrorInner};
 
 /// Common interface for all encoding strategies.
 pub trait EncodingStrategy {
-    fn compute_encoding(&mut self, column: &Column) -> Result<(), PreprocessingError>;
-    fn apply_encoding(
+    fn fit_column(&mut self, column: &Column) -> Result<(), PreprocessingError>;
+    fn transform_column(
         &self,
         dataframe: &mut DataFrame,
         name: &str,
@@ -27,11 +27,35 @@ pub trait EncodingStrategy {
 ///
 /// Use [`LabelEncoder`] or [`OneHotEncoder`] for concrete implementations.
 pub struct Encoder<T: EncodingStrategy> {
-    pub fitted: bool,
-    pub config: T,
+    fitted: bool,
+    fitted_columns: Vec<PlSmallStr>,
+    pub(crate) config: T,
 }
 
 impl<T: EncodingStrategy> Encoder<T> {
+    /// Returns true if the encoder has been fitted.
+    pub fn is_fitted(&self) -> bool {
+        self.fitted
+    }
+
+    /// Returns the columns that were used during fitting.
+    pub fn fitted_columns(&self) -> &[PlSmallStr] {
+        &self.fitted_columns
+    }
+
+    /// Returns a reference to the underlying config.
+    pub fn config(&self) -> &T {
+        &self.config
+    }
+
+    pub(crate) fn with_config(config: T) -> Self {
+        Self {
+            fitted: false,
+            fitted_columns: Vec::new(),
+            config,
+        }
+    }
+
     /// Fits the encoder on the specified columns.
     ///
     /// # Examples
@@ -72,69 +96,59 @@ impl<T: EncodingStrategy> Encoder<T> {
     /// # Ok(())
     /// # }
     /// ```
+    #[must_use = "this returns a Result that should be handled"]
     pub fn fit(
         &mut self,
         dataframe: &DataFrame,
         columns: &[&str],
     ) -> Result<(), PreprocessingError> {
+        self.fitted_columns.reserve(columns.len());
+
         for &name in columns {
-            let column = match dataframe.column(name) {
-                Ok(c) => c.clone(),
-                Err(_) => {
-                    let error = PreprocessingError::ColumnNotFound(name.to_string());
-                    error.print_error();
-                    return Err(error);
-                }
-            };
+            let column = dataframe
+                .column(name)
+                .map_err(|_| PreprocessingErrorInner::ColumnNotFound(name.to_string()))?;
+
             if !matches!(column.dtype(), DataType::String) {
-                let error = PreprocessingError::InvalidColumnType(
-                    name.to_string(),
-                    "String".to_string(),
-                    column.dtype().to_string(),
-                );
-                error.print_error();
-                return Err(error);
+                return Err((PreprocessingErrorInner::InvalidColumnType {
+                    column: name.to_string(),
+                    expected: "String".to_string(),
+                    actual: column.dtype().to_string(),
+                })
+                .into());
             }
-            match self.config.compute_encoding(&column) {
-                Ok(_) => continue,
-                Err(error) => {
-                    error.print_error();
-                    return Err(error);
-                }
-            }
+
+            self.config.fit_column(column)?;
+            self.fitted_columns.push(name.into());
         }
+
         self.fitted = true;
         Ok(())
     }
 
-    pub fn transform(
-        &self,
-        dataframe: &mut DataFrame,
-        columns: &[&str],
-    ) -> Result<(), PreprocessingError> {
+    /// Transforms the DataFrame using the fitted encoding.
+    ///
+    /// Requires a prior call to `.fit()` or `.fit_transform()`.
+    /// Applies encoding to all columns that were specified during fitting.
+    #[must_use = "this returns a Result that should be handled"]
+    pub fn transform(&self, dataframe: &mut DataFrame) -> Result<(), PreprocessingError> {
         if !self.fitted {
-            let error = PreprocessingError::NotFitted;
-            error.print_error();
-            return Err(error);
+            return Err((PreprocessingErrorInner::NotFitted).into());
         }
-        for &name in columns {
-            match self.config.apply_encoding(dataframe, name) {
-                Ok(_) => continue,
-                Err(error) => {
-                    error.print_error();
-                    return Err(error);
-                }
-            }
+
+        for name in &self.fitted_columns {
+            self.config.transform_column(dataframe, name.as_str())?;
         }
         Ok(())
     }
 
+    #[must_use = "this returns a Result that should be handled"]
     pub fn fit_transform(
         &mut self,
         dataframe: &mut DataFrame,
         columns: &[&str],
     ) -> Result<(), PreprocessingError> {
         self.fit(dataframe, columns)?;
-        self.transform(dataframe, columns)
+        self.transform(dataframe)
     }
 }

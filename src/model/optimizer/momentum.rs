@@ -1,136 +1,108 @@
-use ndarray::{Array1, Array2, azip};
+use ndarray::{Array1, Array2, Zip};
+use std::collections::HashMap;
 
-use crate::model::OptimizingStrategy;
-use crate::model::activator::Activation;
+use super::OptimizingStrategy;
+use crate::constants::{DEFAULT_LEARNING_RATE, DEFAULT_MOMENTUM};
 use crate::model::error::ModelError;
-use crate::model::optimizer::BaseOptimizer;
+use crate::model::layer::Layer;
 
-#[derive(Debug, Clone)]
 pub struct Momentum {
-    pub base: BaseOptimizer,
-
+    pub learning_rate: f64,
     pub momentum: f64,
-
-    velocity: Array1<f64>,
-    v_bias: f64,
+    velocity: Vec<(Array2<f64>, Array1<f64>)>,
 }
 
 impl Momentum {
-    pub fn new(
-        learning_rate: f64,
-        max_epochs: usize,
-        tolerance: f64,
-        momentum: f64,
-        activation: Activation,
-    ) -> Self {
+    pub fn new() -> Self {
         Self {
-            base: BaseOptimizer::new(learning_rate, max_epochs, tolerance, activation),
-            momentum: momentum.clamp(0.0, 1.0),
-
-            velocity: Array1::zeros(0),
-            v_bias: 0.0,
+            learning_rate: DEFAULT_LEARNING_RATE,
+            momentum: DEFAULT_MOMENTUM,
+            velocity: Vec::new(),
         }
+    }
+
+    pub fn with_learning_rate(mut self, learning_rate: f64) -> Self {
+        if self.learning_rate != learning_rate {
+            ModelError::print_modifying(format!(
+                "Learning rate from {} to {}",
+                self.learning_rate, learning_rate
+            ));
+            self.learning_rate = learning_rate;
+        }
+        self
+    }
+
+    pub fn with_momentum(mut self, momentum: f64) -> Self {
+        if self.momentum != momentum {
+            ModelError::print_modifying(format!("Momentum from {} to {}", self.momentum, momentum));
+            self.momentum = momentum;
+        }
+        self
+    }
+}
+
+impl Default for Momentum {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl OptimizingStrategy for Momentum {
-    fn base(&self) -> &BaseOptimizer {
-        &self.base
+    fn reset(&mut self) {
+        self.velocity.clear();
     }
 
-    fn base_mut(&mut self) -> &mut BaseOptimizer {
-        &mut self.base
+    fn learning_rate(&self) -> f64 {
+        self.learning_rate
     }
 
-    fn fit(&mut self, x_train: &Array2<f64>, y_train: &Array1<f64>) -> Result<(), ModelError> {
-        let (n_samples, n_features) = x_train.dim();
-        if n_samples != y_train.len() {
-            let error = ModelError::ShapeMismatch(n_samples, y_train.len());
-            error.print_error();
-            return Err(error);
+    fn set_learning_rate(&mut self, learning_rate: f64) {
+        self.learning_rate = learning_rate;
+    }
+
+    fn hyperparameters(&self) -> HashMap<String, f64> {
+        let mut map: HashMap<String, f64> = HashMap::new();
+        map.insert("learning_rate".to_string(), self.learning_rate);
+        map.insert("momentum".to_string(), self.momentum);
+        map
+    }
+
+    fn step(&mut self, layers: &mut Vec<Layer>, gradients: &[(Array2<f64>, Array1<f64>)]) {
+        let lr = self.learning_rate;
+        let momentum = self.momentum;
+
+        if self.velocity.is_empty() {
+            self.velocity = layers
+                .iter()
+                .map(|layer| {
+                    (
+                        Array2::zeros(layer.weights.raw_dim()),
+                        Array1::zeros(layer.bias.len()),
+                    )
+                })
+                .collect()
         }
 
-        self.base.weights = Array1::zeros(n_features);
-        self.velocity = Array1::zeros(n_features);
-        self.base.y_pred_buffer = Array1::zeros(n_samples);
-        self.base.error_buffer = Array1::zeros(n_samples);
-        self.base.dw_buffer = Array1::zeros(n_features);
+        for ((layer, (dw, db)), (vw, vb)) in layers
+            .iter_mut()
+            .zip(gradients.iter())
+            .zip(self.velocity.iter_mut())
+        {
+            Zip::from(layer.weights.view_mut())
+                .and(vw.view_mut())
+                .and(dw.view())
+                .for_each(|w, v, &g| {
+                    *v = momentum * *v + lr * g;
+                    *w -= *v;
+                });
 
-        let n_samples_f = n_samples as f64;
-
-        for epoch in 0..self.base.max_epochs {
-            ndarray::linalg::general_mat_vec_mul(
-                1.0,
-                x_train,
-                &self.base.weights,
-                0.0,
-                &mut self.base.y_pred_buffer,
-            );
-            self.base
-                .activation
-                .apply_inplace(&mut self.base.y_pred_buffer);
-
-            azip!((error in &mut self.base.error_buffer, &pred in &self.base.y_pred_buffer, &actual in y_train) {
-                *error = pred - actual;
-            });
-
-            let mae = self.base.error_buffer.mapv(f64::abs).mean().unwrap_or(0.0);
-            if mae < self.base.tolerance {
-                break;
-            }
-
-            ndarray::linalg::general_mat_vec_mul(
-                1.0 / n_samples_f,
-                &x_train.t(),
-                &self.base.error_buffer,
-                0.0,
-                &mut self.base.dw_buffer,
-            );
-
-            let db = self.base.error_buffer.sum() / n_samples_f;
-
-            azip!((v in &mut self.velocity, &dw in &self.base.dw_buffer) {
-                *v = self.momentum * *v + (1.0 - self.momentum) * dw;
-            });
-            self.v_bias = self.momentum * self.v_bias + (1.0 - self.momentum) * db;
-
-            azip!((w in &mut self.base.weights, &v in &self.velocity) {
-                *w -= self.base.learning_rate * v;
-            });
-            self.base.bias -= self.base.learning_rate * self.v_bias;
-
-            if epoch == self.base.max_epochs - 1 {
-                ModelError::print_warning(format!(
-                    "Momentum did not converge after {} iterations.",
-                    self.base.max_epochs
-                ));
-            }
+            Zip::from(layer.bias.view_mut())
+                .and(vb.view_mut())
+                .and(db.view())
+                .for_each(|b, v, &g| {
+                    *v = momentum * *v + lr * g;
+                    *b -= *v;
+                });
         }
-
-        self.base.fitted = true;
-        Ok(())
-    }
-
-    fn predict(&mut self, x_test: &Array2<f64>) -> Result<Array1<f64>, ModelError> {
-        if !self.base.fitted {
-            let error = ModelError::NotFitted;
-            error.print_error();
-            return Err(error);
-        }
-
-        let mut y_predicted = Array1::zeros(x_test.nrows());
-        ndarray::linalg::general_mat_vec_mul(
-            1.0,
-            x_test,
-            &self.base.weights,
-            0.0,
-            &mut y_predicted,
-        );
-        self.base.activation.apply_inplace(&mut y_predicted);
-        Ok(y_predicted)
-    }
-
-    fn is_fitted(&self) -> bool {
-        self.base.fitted
     }
 }

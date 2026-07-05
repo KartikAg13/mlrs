@@ -10,8 +10,10 @@
 //! seamlessly into the ML preprocessing pipeline (typically after loading
 //! and before imputation/encoding/scaling).
 
-use crate::dataset::preprocesser::error::PreprocessingError;
+use colored::Colorize;
 use polars::prelude::*;
+
+use crate::dataset::preprocessor::error::PreprocessingError;
 
 /// Strategy for determining which rows to drop based on null values.
 ///
@@ -113,27 +115,36 @@ impl Dropper {
     ///
     /// * `dataframe` - Mutable reference to the DataFrame to modify **in-place**.
     /// * `columns` - Slice of `(column_name, strategy)` pairs that define the dropping logic.
-    pub fn drop_rows(
+    #[must_use = "this returns a Result that should be handled"]
+    fn drop_rows(
         dataframe: &mut DataFrame,
         columns: &[(&str, DropperStrategy)],
     ) -> Result<(), PreprocessingError> {
         if columns.is_empty() {
             return Ok(());
         }
+
         let valid: Vec<(&Series, DropperStrategy)> = columns
             .iter()
-            .filter_map(|&(name, strategy)| match dataframe.column(name) {
-                Ok(c) => Some((c.as_materialized_series(), strategy)),
-                Err(_) => {
-                    PreprocessingError::print_warning(format!("Column '{}' not found.", name));
-                    None
+            .filter_map(|&(name, strategy)| {
+                match dataframe.column(name) {
+                    Ok(c) => Some((c.as_materialized_series(), strategy)),
+                    Err(_) => {
+                        // Warn user in yellow (non-fatal)
+                        let msg = format!("Column '{}' not found. Skipping.", name).yellow();
+                        eprintln!("{}{}", "WARNING from Dropper: ".yellow().bold(), msg);
+                        None
+                    }
                 }
             })
             .collect();
+
         if valid.is_empty() {
             return Ok(());
         }
+
         let mut mask: BooleanChunked = valid[0].0.is_not_null();
+
         for (col, strategy) in &valid[1..] {
             let col_mask = col.is_not_null();
             mask = match strategy {
@@ -141,6 +152,7 @@ impl Dropper {
                 DropperStrategy::All => mask | col_mask,
             };
         }
+
         *dataframe = dataframe.filter(&mask)?;
         Ok(())
     }
@@ -154,6 +166,7 @@ impl Dropper {
     ///
     /// * `dataframe` - Mutable reference to the DataFrame to modify **in-place**.
     /// * `columns` - Slice of column names to remove.
+    #[must_use = "this returns a Result that should be handled"]
     pub fn drop_columns(
         dataframe: &mut DataFrame,
         columns: &[&str],
@@ -161,20 +174,51 @@ impl Dropper {
         if columns.is_empty() {
             return Ok(());
         }
-        let to_drop: Vec<&str> = columns
-            .iter()
-            .filter_map(|&name| match dataframe.column(name) {
-                Ok(_) => Some(name),
-                Err(_) => {
-                    PreprocessingError::print_warning(format!("Column '{}' not found.", name));
-                    None
+
+        for &name in columns {
+            match dataframe.column(name) {
+                Ok(_) => {
+                    dataframe.drop_in_place(name)?;
                 }
-            })
-            .collect();
-        for name in to_drop {
-            let _ = dataframe.drop_in_place(name); // ignore error if column already gone
+                Err(_) => {
+                    // Warn user in yellow
+                    let msg = format!("Column '{}' not found. Skipping.", name).yellow();
+                    eprintln!("{}{}", "WARNING from Dropper: ".yellow().bold(), msg);
+                }
+            }
         }
+
         Ok(())
+    }
+
+    /// Convenience method: drops rows where **any** of the specified columns is null.
+    ///
+    /// Equivalent to `drop_rows(df, columns.map(|c| (c, DropperStrategy::Any)))`.
+    #[must_use = "this returns a Result that should be handled"]
+    pub fn drop_rows_any(
+        dataframe: &mut DataFrame,
+        columns: &[&str],
+    ) -> Result<(), PreprocessingError> {
+        let pairs: Vec<(&str, DropperStrategy)> = columns
+            .iter()
+            .map(|&name| (name, DropperStrategy::Any))
+            .collect();
+        Self::drop_rows(dataframe, &pairs)
+    }
+
+    /// Convenience method: drops rows where **all** of the specified columns are null.
+    ///
+    /// Equivalent to `drop_rows(df, columns.map(|c| (c, DropperStrategy::All)))`.
+    #[must_use = "this returns a Result that should be handled"]
+    pub fn drop_rows_all(
+        dataframe: &mut DataFrame,
+        columns: &[&str],
+    ) -> Result<(), PreprocessingError> {
+        let pairs: Vec<(&str, DropperStrategy)> = columns
+            .iter()
+            .map(|&name| (name, DropperStrategy::All))
+            .collect();
+        Self::drop_rows(dataframe, &pairs)
     }
 }
 
@@ -289,5 +333,19 @@ mod tests {
         let original_width = df.width();
         Dropper::drop_columns(&mut df, &[]).unwrap();
         assert_eq!(df.width(), original_width);
+    }
+
+    #[test]
+    fn test_drop_rows_any_convenience() {
+        let mut df = make_df();
+        Dropper::drop_rows_any(&mut df, &["a", "b"]).unwrap();
+        assert_eq!(df.height(), 1);
+    }
+
+    #[test]
+    fn test_drop_rows_all_convenience() {
+        let mut df = make_df();
+        Dropper::drop_rows_all(&mut df, &["a", "b"]).unwrap();
+        assert_eq!(df.height(), 3);
     }
 }

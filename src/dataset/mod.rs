@@ -1,383 +1,558 @@
-//! Dataset loading utilities for ML pipelines.
+//! CSV dataset loader for `mlrs`.
 //!
-//! This module provides a convenient and configurable way to load CSV files into
-//! [`polars::prelude::DataFrame`] with sensible defaults optimized for machine learning workloads.
-//!
+//! Zero-allocation hot paths where possible, cache-friendly chunked reading,
+//! and a clean builder API that matches Polars' performance characteristics
+//! without Pythonic sugar.
 //! # Quick Start
 //!
 //! ```
 //! use mlrs::dataset::read_csv;
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let filepath = "tests/fixtures/sample.csv";
-//! let df = read_csv(filepath);
-//! println!("Loaded dataset with {} rows and {} columns", df.height(), df.width());
-//! # Ok(())
-//! # }
+//!
+//! let df = read_csv("tests/fixtures/sample.csv");
+//!
+//! println!("Rows: {}", df.height());
+//! println!("Columns: {}", df.width());
 //! ```
+//!
+//! For more control over parsing options, use [`CSVReader`].
+// //! For lazy evaluation of large datasets, use [`scan_csv`].
 
+use colored::Colorize;
+use polars::prelude::*;
 use std::path::PathBuf;
 
-use polars::prelude::*;
+pub mod error;
+pub mod preprocessor;
 
-pub mod preprocesser;
+use error::{DatasetError, DatasetErrorInner};
 
-/// Configuration builder for reading CSV files.
+/// Builder for reading CSV files into a `DataFrame`.
 ///
-/// This struct allows fine-grained control over how Polars reads CSV files.
-/// It uses the builder pattern for ergonomic configuration.
-pub struct CSVConfig {
+/// Designed for ML workloads: sensible defaults, explicit control over
+/// threading, memory, and chunking. Consumes itself on `finish()` to avoid
+/// accidental reuse.
+#[derive(Debug, Clone)]
+pub struct CSVReader {
     filepath: PathBuf,
-    has_header: Option<bool>,
-    rechunk: Option<bool>,
-    low_memory: Option<bool>,
+    has_header: bool,
+    rechunk: bool,
+    low_memory: bool,
     n_threads: Option<usize>,
-    chunk_size: Option<usize>,
-    ignore_errors: Option<bool>,
+    chunk_size: usize,
+    ignore_errors: bool,
 }
 
-impl CSVConfig {
-    /// Creates a new `CSVConfig` with sensible defaults for ML datasets.
+impl CSVReader {
+    /// Creates a new CSV reader with sensible defaults for machine learning datasets.
     ///
-    /// # Defaults
+    /// By default:
     ///
-    /// - `has_header`: `true`
-    /// - `rechunk`: `false`
-    /// - `low_memory`: `false`
-    /// - `chunk_size`: 524288 (512 KiB)
-    /// - `ignore_errors`: `false`
+    /// - Assumes the first row contains column names.
+    /// - Uses Polars' automatic thread selection.
+    /// - Reads in 512 KiB chunks.
+    /// - Does not ignore malformed rows.
     ///
     /// # Examples
     ///
     /// **Basic usage:**
-    /// ```
-    /// use mlrs::dataset::CSVConfig;
     ///
-    /// let config = CSVConfig::new("data/train.csv");
     /// ```
+    /// use mlrs::dataset::CSVReader;
     ///
-    /// **With custom options:**
-    /// ```
-    /// # use mlrs::dataset::CSVConfig;
-    /// let config = CSVConfig::new("data/large.csv")
-    ///     .with_has_header(true)
-    ///     .with_n_threads(8)
-    ///     .with_chunk_size(1 << 20)
-    ///     .with_ignore_errors(false);
+    /// let df = CSVReader::new("tests/fixtures/sample.csv")
+    ///     .finish();
+    ///
+    /// assert!(df.height() > 0);
     /// ```
     ///
-    /// **Edge case — minimal configuration (no header):**
+    /// **Advanced configuration:**
+    ///
     /// ```
-    /// # use mlrs::dataset::CSVConfig;
-    /// let config = CSVConfig::new("data/no_header.csv")
-    ///     .with_has_header(false)
-    ///     .with_ignore_errors(true);
+    /// use mlrs::dataset::CSVReader;
+    ///
+    /// let df = CSVReader::new("tests/fixtures/sample.csv")
+    ///     .threads(4)
+    ///     .rechunk(true)
+    ///     .low_memory(false)
+    ///     .chunk_size(1 << 20)
+    ///     .finish();
+    ///
+    /// assert!(df.width() > 0);
     /// ```
-    pub fn new(filepath: impl Into<PathBuf>) -> Self {
+    ///
+    /// **Edge case (CSV without a header):**
+    ///
+    /// ```
+    /// use mlrs::dataset::CSVReader;
+    ///
+    /// let df = CSVReader::new("tests/fixtures/sample.csv")
+    ///     .header(false)
+    ///     .finish();
+    ///
+    /// assert_eq!(df.get_column_names()[0], "column_1");
+    /// ```
+    #[inline]
+    pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
-            filepath: filepath.into(),
-            has_header: Some(true),
-            rechunk: Some(false),
-            low_memory: Some(false),
+            filepath: path.into(),
+            has_header: true,
+            rechunk: false,
+            low_memory: false,
             n_threads: None,
-            chunk_size: Some(1 << 19),
-            ignore_errors: Some(false),
+            chunk_size: 1 << 19,
+            ignore_errors: false,
         }
     }
 
-    pub fn with_has_header(mut self, has_header: bool) -> Self {
-        self.has_header = Some(has_header);
+    /// Whether the first row is a header.
+    ///
+    /// # Example
+    /// ```
+    /// use mlrs::dataset::CSVReader;
+    /// let df = CSVReader::new("tests/fixtures/sample.csv").header(true).finish();
+    /// ```
+    #[inline]
+    pub fn header(mut self, has_header: bool) -> Self {
+        self.has_header = has_header;
         self
     }
 
-    pub fn with_rechunk(mut self, rechunk: bool) -> Self {
-        self.rechunk = Some(rechunk);
+    /// Number of threads for parallel CSV parsing.
+    ///
+    /// # Example
+    /// ```
+    /// use mlrs::dataset::CSVReader;
+    /// let df = CSVReader::new("tests/fixtures/sample.csv").threads(4).finish();
+    /// ```
+    #[inline]
+    pub fn threads(mut self, n: usize) -> Self {
+        self.n_threads = Some(n);
         self
     }
 
-    pub fn with_low_memory(mut self, low_memory: bool) -> Self {
-        self.low_memory = Some(low_memory);
+    /// Force rechunk after reading.
+    ///
+    /// # Example
+    /// ```
+    /// use mlrs::dataset::CSVReader;
+    /// let df = CSVReader::new("tests/fixtures/sample.csv").rechunk(true).finish();
+    /// ```
+    #[inline]
+    pub fn rechunk(mut self, v: bool) -> Self {
+        self.rechunk = v;
         self
     }
 
-    pub fn with_n_threads(mut self, n_threads: usize) -> Self {
-        self.n_threads = Some(n_threads);
+    /// Low-memory mode (slower, lower peak RAM).
+    ///
+    /// # Example
+    /// ```
+    /// use mlrs::dataset::CSVReader;
+    /// let df = CSVReader::new("tests/fixtures/sample.csv").low_memory(true).finish();
+    /// ```
+    #[inline]
+    pub fn low_memory(mut self, v: bool) -> Self {
+        self.low_memory = v;
         self
     }
 
-    pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
-        self.chunk_size = Some(chunk_size);
+    /// Read chunk size in bytes.
+    ///
+    /// # Example
+    /// ```
+    /// use mlrs::dataset::CSVReader;
+    /// let df = CSVReader::new("tests/fixtures/sample.csv").chunk_size(1 << 20).finish();
+    /// ```
+    #[inline]
+    pub fn chunk_size(mut self, size: usize) -> Self {
+        self.chunk_size = size;
         self
     }
 
-    pub fn with_ignore_errors(mut self, ignore_errors: bool) -> Self {
-        self.ignore_errors = Some(ignore_errors);
+    /// Ignore malformed rows instead of failing.
+    ///
+    /// # Example
+    /// ```
+    /// use mlrs::dataset::CSVReader;
+    /// let df = CSVReader::new("tests/fixtures/inconsistent.csv").ignore_errors(true).finish();
+    /// ```
+    #[inline]
+    pub fn ignore_errors(mut self, v: bool) -> Self {
+        self.ignore_errors = v;
         self
     }
 
-    pub fn get_has_header(&self) -> bool {
-        self.has_header.unwrap_or(true)
+    /// Materialize the `DataFrame`.
+    ///
+    /// # Example
+    /// ```
+    /// use mlrs::dataset::CSVReader;
+    /// let df = CSVReader::new("tests/fixtures/sample.csv").try_finish().unwrap();
+    /// ```
+    pub fn try_finish(self) -> Result<DataFrame, DatasetError> {
+        let path = self.filepath.clone();
+
+        CsvReadOptions::default()
+            .with_has_header(self.has_header)
+            .with_rechunk(self.rechunk)
+            .with_low_memory(self.low_memory)
+            .with_n_threads(self.n_threads)
+            .with_chunk_size(self.chunk_size)
+            .with_ignore_errors(self.ignore_errors)
+            .try_into_reader_with_file_path(Some(path.clone()))
+            .map_err(|e| DatasetErrorInner::Parse {
+                path: path.clone(),
+                source: e,
+            })?
+            .finish()
+            .map_err(|e| {
+                use polars::error::PolarsError::*;
+
+                match &e {
+                    NoData(_) => DatasetErrorInner::EmptyFile { path: path.clone() }.into(),
+
+                    ComputeError(_) | SchemaMismatch(_) | ShapeMismatch(_) => {
+                        DatasetErrorInner::Parse {
+                            path: path.clone(),
+                            source: e,
+                        }
+                        .into()
+                    }
+
+                    _ => DatasetErrorInner::Parse { path, source: e }.into(),
+                }
+            })
     }
 
-    pub fn get_rechunk(&self) -> bool {
-        self.rechunk.unwrap_or(false)
-    }
+    /// Materialize the `DataFrame`, panicking with a clear message on failure.
+    ///
+    /// # Example
+    /// ```
+    /// use mlrs::dataset::CSVReader;
+    /// let df = CSVReader::new("tests/fixtures/sample.csv").finish();
+    /// ```
+    pub fn finish(self) -> DataFrame {
+        match self.try_finish() {
+            Ok(df) => df,
 
-    pub fn get_low_memory(&self) -> bool {
-        self.low_memory.unwrap_or(false)
-    }
+            Err(e) => {
+                eprintln!(
+                    "\n{} {}\n",
+                    "ERROR".red().bold(),
+                    e.to_string().bright_red()
+                );
 
-    pub fn get_n_threads(&self) -> Option<usize> {
-        self.n_threads
-    }
-
-    pub fn get_chunk_size(&self) -> usize {
-        self.chunk_size.unwrap_or(1 << 19)
-    }
-
-    pub fn get_ignore_errors(&self) -> bool {
-        self.ignore_errors.unwrap_or(false)
+                panic!("{e}");
+            }
+        }
     }
 }
 
-impl Default for CSVConfig {
-    fn default() -> Self {
-        Self::new("")
-    }
-}
-
-/// Unified way to specify CSV input — either a simple path or a full [`CSVConfig`].
-pub enum CSVRead {
-    Filepath(PathBuf),
-    Config(CSVConfig),
-}
-
-impl From<String> for CSVRead {
-    fn from(value: String) -> Self {
-        CSVRead::Filepath(value.into())
-    }
-}
-
-impl From<&str> for CSVRead {
-    fn from(value: &str) -> Self {
-        CSVRead::Filepath(value.into())
-    }
-}
-
-impl From<CSVConfig> for CSVRead {
-    fn from(value: CSVConfig) -> Self {
-        CSVRead::Config(value)
-    }
-}
-
-fn load_csv(read: impl Into<CSVRead>) -> PolarsResult<DataFrame> {
-    let read = read.into();
-    let config = match read {
-        CSVRead::Filepath(path) => CSVConfig::new(path),
-        CSVRead::Config(cfg) => cfg,
-    };
-    load(config)
-}
-
-/// Reads a CSV file into a [`DataFrame`] using the provided configuration.
+/// Reads a CSV file into a [`DataFrame`] using the default configuration.
 ///
-/// This is the main entry point for loading datasets in `mlrs`.
+/// This is the simplest way to load a dataset.
+///
+/// Internally this is equivalent to:
+///
+/// ```ignore
+/// CSVReader::new(path).finish()
+/// ```
 ///
 /// # Examples
 ///
-/// **Simple usage with path:**
+/// **Basic usage:**
+///
 /// ```
 /// use mlrs::dataset::read_csv;
-/// # let filepath = "tests/fixtures/sample.csv";
-/// let df = read_csv(filepath);
+///
+/// let df = read_csv("tests/fixtures/sample.csv");
+///
 /// assert!(df.height() > 0);
 /// ```
 ///
-/// **Using custom configuration:**
-/// ```
-/// # use mlrs::dataset::{CSVConfig, read_csv};
-/// # let filepath = "tests/fixtures/sample.csv";
-/// let df = read_csv(
-///     CSVConfig::new(filepath)
-///         .with_has_header(true)
-///         .with_n_threads(4)
-/// );
-/// ```
+/// **Edge case (missing file):**
 ///
-/// **Edge case — file with no header and error tolerance:**
+/// ```should_panic
+/// use mlrs::dataset::read_csv;
+///
+/// read_csv("tests/fixtures/does_not_exist.csv");
 /// ```
-/// # use mlrs::dataset::{CSVConfig, read_csv};
-/// # let filepath = "tests/fixtures/sample.csv";
-/// let df = read_csv(
-///     CSVConfig::new(filepath)
-///         .with_has_header(false)
-///         .with_ignore_errors(true)
-/// );
-/// ```
-pub fn read_csv(read: impl Into<CSVRead>) -> DataFrame {
-    load_csv(read).expect("Failed to load csv")
+#[inline]
+pub fn read_csv(path: impl Into<PathBuf>) -> DataFrame {
+    CSVReader::new(path).finish()
 }
 
-fn load(config: CSVConfig) -> PolarsResult<DataFrame> {
-    let dataframe = CsvReadOptions::default()
-        .with_has_header(config.get_has_header())
-        .with_rechunk(config.get_rechunk())
-        .with_low_memory(config.get_low_memory())
-        .with_n_threads(config.get_n_threads())
-        .with_chunk_size(config.get_chunk_size())
-        .with_ignore_errors(config.get_ignore_errors())
-        .try_into_reader_with_file_path(Some(config.filepath.clone()))?
-        .finish()?;
-
-    // println!(
-    //     "Dataset has {} rows and {} columns",
-    //     dataframe.height(),
-    //     dataframe.width()
-    // );
-    // let schema = dataframe.schema();
-    // for (name, datatype) in schema.iter() {
-    //     println!("Column: {}, Datatype: {:?}", name, datatype);
-    // }
-
-    Ok(dataframe)
-}
+// /// Lazily scans a CSV file without immediately loading it into memory.
+// ///
+// /// Unlike [`read_csv`], this function returns a [`LazyFrame`], allowing
+// /// predicate pushdown, projection pushdown, and query optimization before
+// /// materialization.
+// ///
+// /// Call `.collect()` to execute the query.
+// ///
+// /// # Examples
+// ///
+// /// Basic usage:
+// ///
+// /// ```
+// /// use mlrs::dataset::scan_csv;
+// ///
+// /// let df = scan_csv("tests/fixtures/sample.csv")
+// ///     .collect()
+// ///     .unwrap();
+// ///
+// /// assert!(df.height() > 0);
+// /// ```
+// ///
+// /// Filtering before collecting:
+// ///
+// /// ```
+// /// use mlrs::dataset::scan_csv;
+// /// use polars::prelude::*;
+// ///
+// /// let df = scan_csv("tests/fixtures/sample.csv")
+// ///     .filter(col("loan_amnt").gt(lit(10000)))
+// ///     .collect()
+// ///     .unwrap();
+// ///
+// /// assert!(df.height() > 0);
+// /// ```
+// ///
+// /// Edge case (non-existent file):
+// ///
+// /// ```should_panic
+// /// use mlrs::dataset::scan_csv;
+// ///
+// /// scan_csv("tests/fixtures/does_not_exist.csv");
+// /// ```
+// #[inline]
+// pub fn scan_csv(path: impl AsRef<Path>) -> LazyFrame {
+//     LazyCsvReader::new(path.as_ref())
+//         .with_has_header(true)
+//         .finish()
+//         .expect("failed to create lazy CSV reader")
+// }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Use a real fixture in CI. These tests assume it exists.
     const SAMPLE: &str = "tests/fixtures/sample.csv";
-    const EMPTY: &str = "tests/fixtures/empty.csv";
-    const INCONSISTENT: &str = "tests/fixtures/inconsistent.csv";
-
-    const NUMERIC_COL: &str = "loan_amnt";
-    const STRING_COL: &str = "grade";
 
     #[test]
-    fn test_load_csv_filepath_string() {
-        assert!(load_csv(SAMPLE.to_string()).is_ok());
+    fn basic_load_has_rows_and_columns() {
+        let df = CSVReader::new(SAMPLE).finish();
+        assert!(df.height() > 0);
+        assert!(df.width() > 0);
     }
 
     #[test]
-    fn test_load_csv_filepath_str() {
-        assert!(load_csv(SAMPLE).is_ok());
-    }
-
-    #[test]
-    fn test_load_csv_file_not_found() {
-        assert!(load_csv("tests/fixtures/nonexistent.csv").is_err());
-    }
-
-    #[test]
-    fn test_load_csv_empty_file() {
-        match load_csv(EMPTY) {
-            Ok(df) => assert_eq!(df.height(), 0),
-            Err(_) => {}
-        }
-    }
-
-    #[test]
-    fn test_sample_csv_loads_and_has_expected_columns() {
-        let df = load_csv(SAMPLE).unwrap();
-        assert!(df.height() > 1000);
-        assert!(df.column(NUMERIC_COL).is_ok());
-        assert!(df.column(STRING_COL).is_ok());
-    }
-
-    #[test]
-    fn test_with_header_true() {
-        let df = load_csv(SAMPLE).unwrap();
+    fn header_true_exposes_named_columns() {
+        let df = CSVReader::new(SAMPLE).header(true).finish();
         assert!(df.column("loan_amnt").is_ok());
         assert!(df.column("grade").is_ok());
     }
 
     #[test]
-    fn test_with_header_false() {
-        let df = load_csv(CSVConfig::new(SAMPLE).with_has_header(false)).unwrap();
+    fn header_false_uses_column_n() {
+        let df = CSVReader::new(SAMPLE).header(false).finish();
         assert!(df.column("column_1").is_ok());
         assert!(df.column("loan_amnt").is_err());
     }
 
     #[test]
-    fn test_config_defaults() {
-        let cfg = CSVConfig::new(SAMPLE);
-        assert_eq!(cfg.get_has_header(), true);
-        assert_eq!(cfg.get_rechunk(), false);
-        assert_eq!(cfg.get_low_memory(), false);
-        assert_eq!(cfg.get_n_threads(), None);
-        assert_eq!(cfg.get_chunk_size(), 1 << 19);
+    fn try_finish_returns_error_on_missing_file() {
+        let err = CSVReader::new("nonexistent.csv").try_finish();
+        assert!(err.is_err());
+    }
+
+    // #[test]
+    // fn scan_csv_produces_lazy_frame() {
+    //     let lf = scan_csv(SAMPLE);
+    //     let df = lf.collect().unwrap();
+    //     assert!(df.height() > 0);
+    // }
+
+    #[test]
+    fn default_configuration() {
+        let reader = CSVReader::new(SAMPLE);
+
+        assert!(reader.has_header);
+        assert!(!reader.rechunk);
+        assert!(!reader.low_memory);
+        assert_eq!(reader.n_threads, None);
+        assert_eq!(reader.chunk_size, 1 << 19);
+        assert!(!reader.ignore_errors);
     }
 
     #[test]
-    fn test_config_builder_chain() {
-        let cfg = CSVConfig::new(SAMPLE)
-            .with_has_header(false)
-            .with_rechunk(true)
-            .with_low_memory(true)
-            .with_n_threads(4)
-            .with_chunk_size(1024);
-        assert_eq!(cfg.get_has_header(), false);
-        assert_eq!(cfg.get_rechunk(), true);
-        assert_eq!(cfg.get_low_memory(), true);
-        assert_eq!(cfg.get_n_threads(), Some(4));
-        assert_eq!(cfg.get_chunk_size(), 1024);
+    fn builder_chain_updates_every_field() {
+        let reader = CSVReader::new(SAMPLE)
+            .header(false)
+            .threads(4)
+            .rechunk(true)
+            .low_memory(true)
+            .chunk_size(1024)
+            .ignore_errors(true);
+
+        assert!(!reader.has_header);
+        assert_eq!(reader.n_threads, Some(4));
+        assert!(reader.rechunk);
+        assert!(reader.low_memory);
+        assert_eq!(reader.chunk_size, 1024);
+        assert!(reader.ignore_errors);
     }
 
     #[test]
-    fn test_load_with_config() {
-        let cfg = CSVConfig::new(SAMPLE)
-            .with_has_header(true)
-            .with_rechunk(true);
-        assert!(load_csv(cfg).is_ok());
+    fn sample_dimensions_match_fixture() {
+        let df = read_csv(SAMPLE);
+
+        assert_eq!(df.height(), 1001);
+        assert_eq!(df.width(), 142);
     }
 
     #[test]
-    fn test_low_memory_mode() {
-        let cfg = CSVConfig::new(SAMPLE).with_low_memory(true);
-        let df = load_csv(cfg).unwrap();
-        assert!(df.height() > 0);
+    fn expected_columns_exist() {
+        let df = read_csv(SAMPLE);
+
+        let names = df.get_column_names();
+
+        assert!(names.iter().any(|c| *c == "loan_amnt"));
+        assert!(names.iter().any(|c| *c == "grade"));
+        assert!(names.iter().any(|c| *c == "term"));
     }
 
     #[test]
-    fn test_n_threads() {
-        let cfg = CSVConfig::new(SAMPLE).with_n_threads(2);
-        assert!(load_csv(cfg).is_ok());
+    fn column_types_are_correct() {
+        let df = read_csv(SAMPLE);
+
+        assert_eq!(df.column("loan_amnt").unwrap().dtype(), &DataType::Int64);
+        assert_eq!(df.column("grade").unwrap().dtype(), &DataType::String);
     }
 
     #[test]
-    fn test_ignore_errors() {
-        let cfg = CSVConfig::new(INCONSISTENT).with_ignore_errors(true);
-        assert!(load_csv(cfg).is_ok());
-    }
+    fn loads_with_multiple_threads() {
+        for threads in [1, 2, 4, 8] {
+            let df = CSVReader::new(SAMPLE).threads(threads).finish();
 
-    #[test]
-    fn test_csvread_from_string() {
-        let r: CSVRead = SAMPLE.to_string().into();
-        assert!(matches!(r, CSVRead::Filepath(_)));
-    }
-
-    #[test]
-    fn test_csvread_from_str() {
-        let r: CSVRead = SAMPLE.into();
-        assert!(matches!(r, CSVRead::Filepath(_)));
-    }
-
-    #[test]
-    fn test_csvread_from_config() {
-        let r: CSVRead = CSVConfig::new(SAMPLE).into();
-        assert!(matches!(r, CSVRead::Config(_)));
-    }
-
-    #[test]
-    fn test_inconsistent_csv() {
-        match load_csv(INCONSISTENT) {
-            Ok(df) => assert!(df.height() > 0),
-            Err(_) => {}
+            assert!(df.height() > 0);
         }
     }
 
     #[test]
-    fn test_csv_config_default_filepath_is_empty() {
-        let cfg = CSVConfig::default();
-        assert_eq!(cfg.filepath, PathBuf::from(""));
+    fn rechunk_loads_successfully() {
+        let df = CSVReader::new(SAMPLE).rechunk(true).finish();
+
+        assert!(df.height() > 0);
+    }
+
+    #[test]
+    fn low_memory_mode_loads() {
+        let df = CSVReader::new(SAMPLE).low_memory(true).finish();
+
+        assert!(df.height() > 0);
+    }
+
+    #[test]
+    fn multiple_chunk_sizes_work() {
+        for size in [1024, 8192, 65536, 1 << 20] {
+            let df = CSVReader::new(SAMPLE).chunk_size(size).finish();
+
+            assert!(df.height() > 0);
+        }
+    }
+
+    const INCONSISTENT: &str = "tests/fixtures/inconsistent.csv";
+
+    #[test]
+    fn malformed_csv_can_be_ignored() {
+        let df = CSVReader::new(INCONSISTENT).ignore_errors(true).finish();
+
+        assert!(df.height() > 0);
+    }
+
+    const EMPTY: &str = "tests/fixtures/empty.csv";
+
+    #[test]
+    fn empty_csv_returns_error() {
+        assert!(CSVReader::new(EMPTY).try_finish().is_err());
+    }
+
+    #[test]
+    fn read_csv_panics_on_missing_file() {
+        let result = std::panic::catch_unwind(|| {
+            read_csv("missing.csv");
+        });
+
+        assert!(result.is_err());
+    }
+
+    // #[test]
+    // fn lazy_frame_collect_matches_eager() {
+    //     let eager = read_csv(SAMPLE);
+    //     let lazy = scan_csv(SAMPLE).collect().unwrap();
+
+    //     assert_eq!(eager.height(), lazy.height());
+    //     assert_eq!(eager.width(), lazy.width());
+    // }
+
+    #[test]
+    fn cloned_reader_produces_identical_dataframe() {
+        let reader = CSVReader::new(SAMPLE);
+
+        let df1 = reader.clone().finish();
+        let df2 = reader.finish();
+
+        assert_eq!(df1.shape(), df2.shape());
+    }
+
+    const UTF8: &str = "tests/fixtures/utf8.csv";
+
+    #[test]
+    fn utf8_is_preserved() {
+        let df = read_csv(UTF8);
+
+        assert_eq!(
+            df.column("city").unwrap().str().unwrap().get(0),
+            Some("東京")
+        );
+    }
+
+    #[test]
+    fn quoted_commas_are_parsed_correctly() {
+        let df = read_csv("tests/fixtures/quoted.csv");
+
+        assert_eq!(
+            df.column("address").unwrap().str().unwrap().get(0),
+            Some("New York, USA")
+        );
+    }
+
+    #[test]
+    fn escaped_quotes_are_preserved() {
+        let df = read_csv("tests/fixtures/escaped_quotes.csv");
+
+        assert_eq!(
+            df.column("text").unwrap().str().unwrap().get(0),
+            Some("He said \"hello\"")
+        );
+    }
+
+    #[test]
+    fn null_values_are_detected() {
+        let df = read_csv("tests/fixtures/nulls.csv");
+
+        assert_eq!(df.column("b").unwrap().null_count(), 1);
+    }
+
+    #[test]
+    fn no_header_generates_default_names() {
+        let df = CSVReader::new(SAMPLE).header(false).finish();
+
+        let names = df.get_column_names();
+
+        assert_eq!(names[0], "column_1");
+        assert_eq!(names[1], "column_2");
     }
 }

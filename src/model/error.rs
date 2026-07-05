@@ -8,6 +8,15 @@ pub enum ModelError {
 
     #[error("Shape misatch. X has {0} rows, Y has {1} rows.")]
     ShapeMismatch(usize, usize),
+
+    #[error("Invalid normal distribution parameter using input_size {0}.")]
+    InvalidNormalDistribution(usize),
+
+    #[error("File could not be created {0}.")]
+    InvalidFilePath(String),
+
+    #[error("Unexpected error occured. Please retry.")]
+    UnexpectedError,
 }
 
 impl ModelError {
@@ -20,6 +29,6 @@ impl ModelError {
     }
 
     pub fn print_modifying(message: String) {
-        println!("{}{}", "MODIFYING: ".green(), message.green());
+        println!("{}{}", "MODIFICATION: ".green(), message.green());
     }
 }

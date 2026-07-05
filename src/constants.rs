@@ -14,6 +14,15 @@ pub const DEFAULT_MAX_EPOCHS: usize = 10_000;
 /// Default convergence tolerance
 pub const DEFAULT_TOLERANCE: f64 = 1e-4;
 
+/// Default momentum
+pub const DEFAULT_MOMENTUM: f64 = 0.9;
+
+/// Default beta for rms prop
+pub const DEFAULT_BETA: f64 = 0.9;
+
+/// Default beta2 for adam
+pub const DEFAULT_BETA2: f64 = 0.999;
+
 // ==================== Regularization ====================
 
 /// Default L1 ratio (Lasso strength). 0.0 = no L1 regularization
